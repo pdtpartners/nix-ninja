@@ -52,10 +52,9 @@ You can also try running `nix-ninja` outside of Nix, but you'll need both
 `nix-ninja` generates.
 
 ```sh
-NIX_NINJA=$(nix build --print-out-paths .#nix-ninja)
-NIX_NINJA_TASK=$(nix build --print-out-paths .#nix-ninja-task)
-export PATH="${NIX_NINJA}/bin:${NIX_NINJA_TASK}/bin:$PATH"
-# Meson respects this environment variable and uses it as if it's ninja.
+NIX_NINJA=$(nix build --print-out-paths)
+export PATH="${NIX_NINJA}/bin:$PATH"
+# Meson respects this environment variable and uses as if its ninja.
 export NINJA="${NIX_NINJA}/bin/nix-ninja"
 ```
 

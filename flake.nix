@@ -97,6 +97,14 @@
         };
       });
 
+      default = pkgs.buildEnv {
+        name = "nix-ninja";
+        paths = [
+          nix-ninja
+          nix-ninja-task
+        ];
+      };
+
       mkMesonPackage = pkgs.callPackage ./mkMesonPackage.nix {
         inherit nix-ninja nix-ninja-task;
       };
@@ -241,11 +249,9 @@
       };
 
       packages.${system} = {
-        inherit nix-ninja nix-ninja-task;
+        inherit default nix-ninja nix-ninja-task;
 
         inherit (pkgs) nix;
-
-        default = nix-ninja;
 
         nix-ninja-llvm-coverage = craneLibLLvmTools.cargoLlvmCov (commonArgs // {
           inherit cargoArtifacts;

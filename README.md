@@ -21,8 +21,8 @@ system that outputs ninja like CMake, meson, premake, gn, etc.
   and Nix-native incrementality.
 - Compatible CLI for ninja, so if you set `$NINJA` to `nix-ninja` then meson
   just works.
-- Supports running locally which runs `nix build` on your behalf, or inside a
-  Nix derivation which writes out dynamic derivations.
+- Supports running locally (which runs `nix build` on your behalf), or inside a
+  Nix derivation (which creates dynamic derivations).
 
 ## Getting started
 
@@ -55,7 +55,7 @@ You can also try running `nix-ninja` outside of Nix, but you'll need both
 NIX_NINJA=$(nix build --print-out-paths .#nix-ninja)
 NIX_NINJA_TASK=$(nix build --print-out-paths .#nix-ninja-task)
 export PATH="${NIX_NINJA}/bin:${NIX_NINJA_TASK}/bin:$PATH"
-# Meson respects this environment variable and uses as if its ninja.
+# Meson respects this environment variable and uses it as if it's ninja.
 export NINJA="${NIX_NINJA}/bin/nix-ninja"
 ```
 

@@ -1,0 +1,10 @@
+diff --git a/meson.build b/meson.build
+index cf1b877f9..b2578ab94 100644
+--- a/meson.build
++++ b/meson.build
+@@ -565,4 +565,4 @@ if enable_tests
+   subdir('tests/functional')
+ endif
+ 
+-subdir('meson/clang-tidy')
++# subdir('meson/clang-tidy')

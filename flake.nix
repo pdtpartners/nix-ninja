@@ -6,6 +6,8 @@
 
     nix.url = "github:hinshun/nix/2.27.1-fix-nix-missing-includes";
 
+    lix.url = "github:lix-project/lix/2.91.1";
+
     globset = {
       url = "github:pdtpartners/globset";
       inputs.nixpkgs-lib.follows = "nixpkgs";
@@ -113,69 +115,12 @@
         target = "hello";
       };
 
-      example-nix = mkMesonPackage {
-        name = "example-nix";
-        src = inputs.nix;
-        target = "src/nix/nix";
+      example-nix = pkgs.callPackage ./examples/nix {
+        inherit inputs mkMesonPackage;
+      };
 
-        nixNinjaExtraInputs = [
-          "src/libexpr/libnixexpr.so.p/meson-generated_.._parser-tab.cc.o:../src/libexpr/parser.y"
-          "src/libexpr/libnixexpr.so.p/meson-generated_.._lexer-tab.cc.o:../src/libexpr/parser.y"
-          "src/libexpr/libnixexpr.so.p/meson-generated_.._lexer-tab.cc.o:../src/libexpr/lexer.l"
-          "src/libexpr/libnixexpr.so.p/eval.cc.o:../src/libexpr/parser.y"
-          "src/libexpr/libnixexpr.so.p/lexer-helpers.cc.o:../src/libexpr/parser.y"
-        ];
-
-        nativeBuildInputs = with pkgs; [
-          aws-sdk-cpp
-          bison
-          boehmgc
-          boost
-          brotli
-          busybox-sandbox-shell
-          bzip2
-          cmake
-          curl
-          doxygen
-          editline
-          flex
-          libarchive
-          libblake3
-          libcpuid
-          libgit2
-          libseccomp
-          libsodium
-          lowdown
-          nlohmann_json
-          openssl
-          perl
-          pkg-config
-          readline
-          sqlite
-          toml11
-        ];
-
-        buildInputs = with pkgs; [
-          rapidcheck
-          gtest
-        ];
-
-        # dontAddPrefix = true;
-
-        mesonFlags = with pkgs; [
-          "--prefix=/build/tmp"
-          "--bindir=/build/tmp/bin"
-          "--mandir=/build/tmp/man"
-          (lib.mesonOption "perl:dbi_path" "${perlPackages.DBI}/${perl.libPrefix}")
-          (lib.mesonOption "perl:dbd_sqlite_path" "${perlPackages.DBDSQLite}/${perl.libPrefix}")
-        ];
-
-        env = with pkgs; {
-          # Needed for Meson to find Boost.
-          # https://github.com/NixOS/nixpkgs/issues/86131.
-          BOOST_INCLUDEDIR = "${lib.getDev boost}/include";
-          BOOST_LIBRARYDIR = "${lib.getLib boost}/lib";
-        };
+      example-lix = pkgs.callPackage ./examples/lix {
+        inherit inputs mkMesonPackage;
       };
 
     in
@@ -255,6 +200,7 @@
           example-hello
           example-header
           example-nix
+          example-lix
         ;
       };
 

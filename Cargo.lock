@@ -687,7 +687,7 @@ dependencies = [
 [[package]]
 name = "n2"
 version = "0.1.0"
-source = "git+https://github.com/hinshun/n2?branch=feature%2Flazy-build#1050bf803533f8779896a7f531de5e3f02a91863"
+source = "git+https://github.com/hinshun/n2?branch=feature%2Fminimal-pub#384e1cae052af289602a5b5862443e87d3389ee9"
 dependencies = [
  "anyhow",
  "lexopt",

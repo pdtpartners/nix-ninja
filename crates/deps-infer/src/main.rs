@@ -93,7 +93,6 @@ fn load_targets(build_filename: &str) -> Result<Vec<Target>> {
     };
 
     loader.parse(path, &bytes)?;
-    loader.evaluate_builds()?;
 
     let mut targets: Vec<Target> = Vec::new();
     for fid in loader.graph.files.by_id.all_ids() {

@@ -6,11 +6,10 @@ description = "Ninja compatible build system using Nix backend"
 
 [dependencies]
 anyhow = { version = "1.0", features = [ "backtrace" ] }
-# anyhow = "1.0"
 clap = { version = "4.4", features = ["derive", "env"] }
 deps-infer = { path = "../deps-infer" }
 include-graph = { git = "https://github.com/hinshun/igraph", branch = "performance-improvements" }
-n2 = { git = "https://github.com/hinshun/n2", branch = "feature/lazy-build", default-features = false }
+n2 = { git = "https://github.com/hinshun/n2", branch = "feature/minimal-pub", default-features = false }
 nix-libstore = { path = "../nix-libstore" }
 nix-ninja-task = { path = "../nix-ninja-task" }
 nix-tool = { path = "../nix-tool" }

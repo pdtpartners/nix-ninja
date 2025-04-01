@@ -8,7 +8,7 @@ description = "Dependency inference for C/C++"
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 include-graph = { git = "https://github.com/hinshun/igraph", branch = "performance-improvements" }
-n2 = { git = "https://github.com/hinshun/n2", branch = "feature/lazy-build", default-features = false }
+n2 = { git = "https://github.com/hinshun/n2", branch = "feature/minimal-pub", default-features = false }
 shell-words = "1.1.0"
 tracing = { version = "0.1"}
 tracing-subscriber = { version = "0.3.18", features = [

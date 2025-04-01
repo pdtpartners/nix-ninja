@@ -2,9 +2,7 @@ use crate::task;
 use anyhow::bail;
 use anyhow::{anyhow, Result};
 use n2::densemap::DenseMap;
-use n2::graph;
-use n2::graph::{BuildId, FileId};
-use n2::load::LazyBuild;
+use n2::graph::{Build, BuildId, FileId, Graph};
 use n2::{canon, load, scanner};
 use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::{NixTool, StoreConfig};
@@ -26,8 +24,6 @@ pub fn build(
 ) -> Result<DerivedFile> {
     let mut loader = load_file(build_filename)?;
 
-    let mut graph = Graph::new(&mut loader.graph.files, &mut loader.lazy_builds);
-
     let nix = NixTool::new(StoreConfig {
         nix_tool: config.nix_tool,
         extra_args: Vec::new(),
@@ -45,13 +41,12 @@ pub fn build(
             system: "x86_64-linux".to_string(),
             build_dir: config.build_dir,
             store_dir: config.store_dir,
-            env: loader.env,
         },
     )?;
-    runner.read_build_dir(&mut graph.files)?;
-    runner.add_extra_inputs(&mut graph.files, config.extra_inputs)?;
+    runner.read_build_dir(&mut loader.graph.files)?;
+    runner.add_extra_inputs(&mut loader.graph.files, config.extra_inputs)?;
 
-    let mut scheduler = Scheduler::new(&mut graph, &mut runner);
+    let mut scheduler = Scheduler::new(&mut loader.graph, &mut runner);
 
     // TODO: Support multiple targets, probably treat it like a dynamically
     // generated phony target.
@@ -222,29 +217,18 @@ impl BuildStates {
     }
 }
 
-struct Graph<'a> {
-    files: &'a mut graph::GraphFiles,
-    builds: &'a mut DenseMap<BuildId, LazyBuild>,
-}
-
-impl<'a> Graph<'a> {
-    fn new(files: &'a mut graph::GraphFiles, builds: &'a mut DenseMap<BuildId, LazyBuild>) -> Self {
-        Graph { files, builds }
-    }
-}
-
 /// Topological scheduler of a Ninja build graph.
 ///
 /// Calls out to Runner to start a build task when all its dependencies are
 /// ready.
 struct Scheduler<'a> {
-    graph: &'a mut Graph<'a>,
+    graph: &'a mut Graph,
     runner: &'a mut task::Runner,
     build_states: BuildStates,
 }
 
 impl<'a> Scheduler<'a> {
-    fn new(graph: &'a mut Graph<'a>, runner: &'a mut task::Runner) -> Self {
+    fn new(graph: &'a mut Graph, runner: &'a mut task::Runner) -> Self {
         let build_count = graph.builds.next_id();
 
         Scheduler {
@@ -266,7 +250,7 @@ impl<'a> Scheduler<'a> {
 
     // Check whether a given build is ready, after one of its inputs was
     // completed.
-    fn recheck_ready(&self, build: &LazyBuild) -> bool {
+    fn recheck_ready(&self, build: &Build) -> bool {
         for fid in build.ordering_ins() {
             let file = &self.graph.files.by_id[*fid];
             match file.input {
@@ -316,7 +300,7 @@ impl<'a> Scheduler<'a> {
                 let build = &self.graph.builds[bid];
                 self.build_states.set(bid, BuildState::Running);
                 // println!("Writing derivation for {:?} at {:?}", &bid, &build.location);
-                self.runner.start(self.graph.files, bid, build)?;
+                self.runner.start(&mut self.graph.files, bid, build)?;
                 made_progress = true;
             }
 
@@ -324,7 +308,7 @@ impl<'a> Scheduler<'a> {
                 continue;
             }
 
-            let bid = self.runner.wait(self.graph.files)?;
+            let bid = self.runner.wait(&mut self.graph.files)?;
             // println!("Derivation for build {:?} has been written", &bid);
             self.ready_dependents(bid);
         }

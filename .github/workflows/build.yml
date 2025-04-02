@@ -1,0 +1,37 @@
+name: builder
+on: [push, pull_request]
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Cache Rust Artifacts
+        uses: actions/cache@v4
+        env:
+          cache-name: cache-rust-artifacts
+        with:
+          path: |
+            /home/runner/.cargo
+            target
+          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', '**/.cargo/config.toml', '**/rust-toolchain.toml', '**/flake.nix', '**/flake.lock') }}
+
+      - name: Build
+        run: |
+          eval "$(nix print-dev-env)"
+
+          set -x
+          cargo fmt --check
+          cargo clippy
+          cargo test
+
+  nix-build:
+    name: Nix Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+
+      - name: Build with Nix
+        run: nix build -Lv

@@ -118,11 +118,10 @@ mod tests {
 
     #[test]
     fn test_standard_placeholder() {
-        let placeholder = Placeholder::standard_output("out").unwrap();
+        let placeholder = Placeholder::standard_output("out");
         assert_eq!(
             placeholder.render(),
-            // Nix repl value of: builtins.placeholder "out"
-            "/1rz4g4znpzjwh1xymhjpm42vipw92pr73vdgl6xs1hycac8kf2n9"
+            PathBuf::from("/1rz4g4znpzjwh1xymhjpm42vipw92pr73vdgl6xs1hycac8kf2n9")
         );
     }
 
@@ -130,10 +129,10 @@ mod tests {
     fn test_ca_placeholder() {
         let store_path =
             StorePath::new("/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv").unwrap();
-        let placeholder = Placeholder::ca_output(&store_path, "out").unwrap();
+        let placeholder = Placeholder::ca_output(&store_path, "out");
         assert_eq!(
             placeholder.render(),
-            "/0c6rn30q4frawknapgwq386zq358m8r6msvywcvc89n6m5p2dgbz"
+            PathBuf::from("/0c6rn30q4frawknapgwq386zq358m8r6msvywcvc89n6m5p2dgbz")
         );
     }
 
@@ -141,11 +140,11 @@ mod tests {
     fn test_dynamic_placeholder() {
         let store_path =
             StorePath::new("/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv.drv").unwrap();
-        let placeholder = Placeholder::ca_output(&store_path, "out").unwrap();
-        let dynamic = Placeholder::dynamic_output(&placeholder, "out").unwrap();
+        let placeholder = Placeholder::ca_output(&store_path, "out");
+        let dynamic = Placeholder::dynamic_output(&placeholder, "out");
         assert_eq!(
             dynamic.render(),
-            "/0gn6agqxjyyalf0dpihgyf49xq5hqxgw100f0wydnj6yqrhqsb3w",
+            PathBuf::from("/0gn6agqxjyyalf0dpihgyf49xq5hqxgw100f0wydnj6yqrhqsb3w"),
         )
     }
 

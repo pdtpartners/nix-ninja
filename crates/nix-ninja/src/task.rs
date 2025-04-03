@@ -271,11 +271,15 @@ impl Runner {
         // they must all be linked into the derivation's source directory.
         let mut input_set: HashMap<PathBuf, DerivedFile> = HashMap::new();
         for fid in build.ordering_ins() {
-            // TODO: what about phony inputs?
             let input = match self.derived_files.get(fid) {
                 Some(df) => df.to_owned(),
                 None => {
                     let file = &files.by_id[*fid];
+                    // TODO: Skipping outputs of phony targets for now.
+                    if let Some(_) = file.input {
+                        continue;
+                    }
+
                     if file.name.starts_with(&store_dir) {
                         // TODO: Perhaps need to add this as inputSrc? But
                         // will also have to change DerivedFile to have source
@@ -512,11 +516,12 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
             .next()
             .ok_or_else(|| anyhow!("No command found in cmdline"))?;
 
-        // TODO: If you don't find it it's ok, e.g. ./generated_binary
-        let cmdline_path = which_store_path(&cmdline_binary)?;
+        // If you don't find it it's ok, e.g. ./generated_binary
+        if let Ok(cmdline_path) = which_store_path(&cmdline_binary) {
+            drv.add_input_src(&cmdline_path.to_string());
+            path.push(format!("{}/bin", cmdline_path.to_string()));
+        };
 
-        drv.add_input_src(&cmdline_path.to_string());
-        path.push(format!("{}/bin", cmdline_path.to_string()));
         drv.add_env("PATH", &path.join(":"));
     }
 
@@ -549,7 +554,8 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
 }
 
 fn process_phony(_: Tools, _: Task) -> Result<Vec<DerivedFile>> {
-    Err(anyhow!("Unimplemented"))
+    Ok(Vec::new())
+    // Err(anyhow!("Unimplemented"))
 }
 
 pub fn which_store_path(binary_name: &str) -> Result<StorePath> {

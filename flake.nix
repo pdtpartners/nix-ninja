@@ -268,6 +268,7 @@
         checks = inputs.self.checks.${system};
 
         packages = with pkgs; [
+          cmake
           gnumake
           just
           meson

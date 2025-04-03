@@ -123,13 +123,9 @@ impl Runner {
             }
 
             let path = entry.into_path();
-            let relative_path = match relative_from(&path, &self.config.build_dir) {
-                Some(p) => p,
-                None => path,
-            };
-
-            let derived_file = new_opaque_file(&self.tools.nix, relative_path.clone())?;
-            let fid = self.add_derived_file(files, derived_file.clone(), &relative_path);
+            let derived_file =
+                new_opaque_file(&self.tools.nix, &self.config.build_dir, path.clone())?;
+            let fid = self.add_derived_file(files, derived_file.clone());
             self.build_dir_inputs.insert(fid, derived_file);
         }
         Ok(())
@@ -168,8 +164,12 @@ impl Runner {
                 None => Vec::new(),
             };
 
-            let derived_file = new_opaque_file(&self.tools.nix, extra_input_path.clone())?;
-            self.add_derived_file(files, derived_file.clone(), &extra_input_path);
+            let derived_file = new_opaque_file(
+                &self.tools.nix,
+                &self.config.build_dir,
+                extra_input_path.clone(),
+            )?;
+            self.add_derived_file(files, derived_file.clone());
 
             extra_inputs.push(derived_file);
             self.extra_inputs.insert(bid, extra_inputs);
@@ -225,7 +225,7 @@ impl Runner {
         }
 
         for derived_file in result.derived_files {
-            self.add_derived_file(files, derived_file.clone(), &derived_file.source);
+            self.add_derived_file(files, derived_file.clone());
         }
 
         Ok(result.bid)
@@ -235,11 +235,8 @@ impl Runner {
         &mut self,
         files: &mut graph::GraphFiles,
         derived_file: DerivedFile,
-        path: &PathBuf,
     ) -> FileId {
-        let mut path_str = path.to_string_lossy().into_owned();
-        canon::canonicalize_path(&mut path_str);
-
+        let path_str = derived_file.source.to_string_lossy().into_owned();
         let fid = match files.lookup(&path_str) {
             Some(fid) => fid,
             None => files.id_from_canonical(path_str),
@@ -288,12 +285,12 @@ impl Runner {
                         continue;
                     }
 
-                    let input = new_opaque_file(&self.tools.nix, file.name.clone().into())?;
-                    self.add_derived_file(
-                        files,
-                        input.clone().to_owned(),
-                        &file.name.clone().into(),
-                    );
+                    let input = new_opaque_file(
+                        &self.tools.nix,
+                        &self.config.build_dir,
+                        file.name.clone().into(),
+                    )?;
+                    self.add_derived_file(files, input.clone().to_owned());
                     input.to_owned()
                 }
             };
@@ -425,14 +422,14 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
         .add_input_src(&tools.nix_ninja_task.to_string());
 
     // Add all ninja build inputs.
-    let mut inputs: Vec<String> = Vec::new();
+    let mut input_set: HashSet<String> = HashSet::new();
     for input in &task.inputs {
         // Declare input for derivation.
         add_derived_path(&mut drv, input);
 
         // Encode input for nix-ninja-task.
         let encoded = &input.to_encoded();
-        inputs.push(encoded.clone());
+        input_set.insert(encoded.clone());
     }
 
     // Handle when rule's dep = gcc, which means we need to find all the
@@ -464,23 +461,15 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
                     }
                 }
 
-                // Make it relative to the build directory.
-                let relative_include = match relative_from(&include, &task.build_dir) {
-                    Some(p) => p,
-                    None => include,
-                };
-                let mut path = relative_include.to_string_lossy().into_owned();
-                canon::canonicalize_path(&mut path);
-
+                let derived_file = new_opaque_file(&tools.nix, &task.build_dir, include)?;
                 // Skip paths that are already in the task inputs.
-                if file_set.contains(&PathBuf::from(path.clone())) {
+                if file_set.contains(&derived_file.source) {
                     continue;
                 }
 
-                let derived_file = new_opaque_file(&tools.nix, path.into())?;
                 let encoded = &derived_file.to_encoded();
                 // Should be source-linked.
-                inputs.push(encoded.clone());
+                input_set.insert(encoded.clone());
                 // Should be included as an input to derivation.
                 add_derived_path(&mut drv, &derived_file);
                 // Should be returned back to the Runner as a discovered input.
@@ -488,6 +477,8 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
             }
         }
     }
+
+    let inputs: Vec<String> = input_set.into_iter().collect();
     drv.add_env("NIX_NINJA_INPUTS", &inputs.join(" "));
 
     // Add all ninja build outputs.
@@ -582,12 +573,19 @@ fn extract_store_paths(store_regex: &Regex, s: &str) -> Result<Vec<StorePath>> {
     Ok(store_paths)
 }
 
-fn new_opaque_file(nix: &NixTool, path: PathBuf) -> Result<DerivedFile> {
+fn new_opaque_file(nix: &NixTool, build_dir: &PathBuf, path: PathBuf) -> Result<DerivedFile> {
+    let relative_path = match relative_from(&path, build_dir) {
+        Some(p) => p,
+        None => path,
+    };
+    let mut path = relative_path.to_string_lossy().into_owned();
+    canon::canonicalize_path(&mut path);
+
     let canonical_path = fs::canonicalize(&path)?;
     let store_path = nix.store_add(&canonical_path)?;
     Ok(DerivedFile {
         path: SingleDerivedPath::Opaque(store_path.clone()),
-        source: path,
+        source: relative_path,
     })
 }
 

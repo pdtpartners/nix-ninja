@@ -121,6 +121,12 @@
         target = "hello";
       };
 
+      example-incremental = mkMesonPackage {
+        name = "example-header";
+        src = ./examples/incremental;
+        target = "main";
+      };
+
       example-nix = mkMesonPackage {
         name = "example-nix";
         src = inputs.nix;
@@ -260,6 +266,7 @@
         inherit
           example-hello
           example-header
+          example-incremental
           example-nix
         ;
       };
@@ -271,6 +278,7 @@
           gnumake
           just
           meson
+          agg
         ];
       };
     };

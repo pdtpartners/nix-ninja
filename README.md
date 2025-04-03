@@ -8,6 +8,8 @@ Incremental compilation of [Ninja build files][ninja-build] using
 Choosing ninja as the build graph representation lets us support any build
 system that outputs ninja like CMake, meson, premake, gn, etc.
 
+[![Demo](docs/demo.gif)](https://asciinema.org/a/711344)
+
 [Key features](#key-features) •
 [Getting started](#getting-started) •
 [Design notes][design notes] •
@@ -58,9 +60,9 @@ You can also try running `nix-ninja` outside of Nix, but you'll need both
 `nix-ninja` generates.
 
 ```sh
-NIX_NINJA=$(nix build --print-out-paths)
+export NIX_NINJA=$(nix build --print-out-paths)
 export PATH="${NIX_NINJA}/bin:$PATH"
-# Meson respects this environment variable and uses as if its ninja.
+# Meson respects this environment variable and uses it as if its ninja.
 export NINJA="${NIX_NINJA}/bin/nix-ninja"
 ```
 

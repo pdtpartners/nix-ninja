@@ -133,7 +133,6 @@ fn nix_build(cli: &Cli, derived_file: &DerivedFile) -> Result<()> {
 
     let output = nix.build(&derived_file.path)?;
     let stdout = str::from_utf8(&output.stdout)?;
-    println!("stdout: {}", stdout);
     let drv_output = StorePath::new(stdout.trim())?;
 
     if derived_file.source.exists() {

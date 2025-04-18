@@ -4,6 +4,17 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
+    nix-dynamic-derivations = {
+      url = "github:NixOS/nix?rev=d904921eecbc17662fef67e8162bd3c7d1a54ce0";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    nix-portable ={ 
+      url = "github:jaen/nix-portable/improvements";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.defaultChannel.follows = "nixpkgs";
+    };
+
     nix.url = "github:hinshun/nix/2.27.1-fix-nix-missing-includes";
 
     lix.url = "github:lix-project/lix/2.91.1";
@@ -41,6 +52,10 @@
       };
 
       inherit (pkgs) lib;
+
+      nixDdPortable = pkgs.callPackage ./nix/packages/nix-portable {
+        inherit inputs;
+      };
 
       craneLib = inputs.crane.mkLib pkgs;
 
@@ -188,7 +203,9 @@
       packages.${system} = {
         inherit nix-ninja nix-ninja-task;
 
-        inherit (pkgs) nix;
+        inherit nixDdPortable;
+
+        nix = nixDdPortable;
 
         default = nix-ninja;
 
@@ -207,10 +224,31 @@
       devShells.${system}.default = craneLib.devShell {
         checks = inputs.self.checks.${system};
 
+        shellHook = ''
+          if command -v direnv_layout_dir 2>&1 >/dev/null; then
+            export NP_LOCATION="$(direnv_layout_dir)"
+            mkdir -p "$NP_LOCATION"
+
+            ADDITIONAL_CONFIG_FILE="$NP_LOCATION/nix-additional.conf"
+            rm $ADDITIONAL_CONFIG_FILE
+          fi
+
+          if command -v git 2>&1 >/dev/null; then
+            export NP_GIT="$(which git)"
+          fi
+
+          echo "max-jobs = auto" >> "$ADDITIONAL_CONFIG_FILE"
+          echo "cores = 0" >> "$ADDITIONAL_CONFIG_FILE"
+
+          export NP_CONF_ADDITIONAL_CONFIG="$ADDITIONAL_CONFIG_FILE"
+          export NP_CONF_ADDITIONAL_FEATURES="ca-derivations dynamic-derivations recursive-nix"
+        '';
+
         packages = with pkgs; [
           gnumake
           just
           meson
+          nixDdPortable
         ];
       };
     };

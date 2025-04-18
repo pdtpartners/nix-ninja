@@ -72,6 +72,14 @@
         };
       });
 
+      nixDdPortable = self.callPackage ./pkgs/nix-portable {
+        inherit (inputs) nix-portable;
+        inherit (inputs.nix.packages.${self.system})
+          nix-everything
+          nix-everything-static
+        ;
+      };
+
       example-hello = self.mkMesonPackage {
         name = "example-hello";
         src = ./examples/hello;

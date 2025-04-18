@@ -3,7 +3,15 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    nix.url = "github:hinshun/nix/2.27.1-fix-nix-missing-includes";
+    nix = {
+      url = "github:hinshun/nix/2.30.2-fix-nix-missing-includes";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    nix-portable ={ 
+      url = "github:jaen/nix-portable/improvements";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.defaultChannel.follows = "nixpkgs";
+    };
     globset = {
       url = "github:pdtpartners/globset";
       inputs.nixpkgs-lib.follows = "nixpkgs";

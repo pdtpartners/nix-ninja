@@ -574,10 +574,7 @@ fn extract_store_paths(store_regex: &Regex, s: &str) -> Result<Vec<StorePath>> {
 }
 
 fn new_opaque_file(nix: &NixTool, build_dir: &PathBuf, path: PathBuf) -> Result<DerivedFile> {
-    let relative_path = match relative_from(&path, build_dir) {
-        Some(p) => p,
-        None => path,
-    };
+    let relative_path = relative_from(&path, build_dir).unwrap_or(path);
     let mut path = relative_path.to_string_lossy().into_owned();
     canon::canonicalize_path(&mut path);
 

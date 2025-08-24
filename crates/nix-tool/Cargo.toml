@@ -3,6 +3,7 @@ name = "nix-tool"
 version.workspace = true
 edition.workspace = true
 description = "Helper to spawn Nix commands"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0"

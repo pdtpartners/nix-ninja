@@ -3,6 +3,7 @@ name = "nix-ninja-task"
 version.workspace = true
 edition.workspace = true
 description = "Nix derivation builder for nix-ninja"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0"

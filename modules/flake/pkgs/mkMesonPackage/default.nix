@@ -57,6 +57,10 @@ let
     __contentAddressed = true;
     outputHashMode = "text";
     outputHashAlgo = "sha256";
+
+    passthru = {
+      target = builtins.outputOf ninjaDrv.outPath normalizedTarget;
+    };
   });
 
-in builtins.outputOf ninjaDrv.outPath normalizedTarget
+in ninjaDrv

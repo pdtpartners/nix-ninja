@@ -3,6 +3,7 @@ name = "deps-infer"
 version.workspace = true
 edition.workspace = true
 description = "Dependency inference for C/C++"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
@@ -10,12 +11,12 @@ clap = { version = "4.5", features = ["derive"] }
 include-graph = { git = "https://github.com/hinshun/igraph", branch = "performance-improvements" }
 n2 = { git = "https://github.com/hinshun/n2", branch = "feature/minimal-pub", default-features = false }
 shell-words = "1.1.0"
-tracing = { version = "0.1"}
+tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3.18", features = [
-    "json",
-    "matchers",
-    "time",
-    "tracing",
-    "env-filter",
-    "regex",
-]}
+  "json",
+  "matchers",
+  "time",
+  "tracing",
+  "env-filter",
+  "regex",
+] }

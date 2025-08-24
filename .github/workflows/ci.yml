@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    types: [ opened, reopened, labeled, synchronize ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v19
+      - uses: DeterminateSystems/magic-nix-cache-action@v13
+      - name: Cache Rust Artifacts
+        uses: actions/cache@v4
+        env:
+          cache-name: cache-rust-artifacts
+        with:
+          path: |
+            /home/runner/.cargo
+            target
+          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', '**/.cargo/config.toml', '**/rust-toolchain.toml', '**/flake.nix', '**/flake.lock') }}
+      - name: Build
+        run: |
+          eval "$(nix print-dev-env)"
+
+          set -x
+          cargo fmt --check
+          cargo clippy
+          cargo test
+
+  integration-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test:
+          - nix-build-hello
+          - nix-build-header
+          - nix-build-incremental
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v19
+        with:
+          extra-conf: |-
+            extra-experimental-features = dynamic-derivations ca-derivations recursive-nix
+      - uses: DeterminateSystems/magic-nix-cache-action@v13
+      - name: Build NixOS test driver
+        run: nix build .#driver-${{ matrix.test }}
+      - name: Run integration tests
+        run: nix run -L .#test-${{ matrix.test }}

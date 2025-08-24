@@ -3,9 +3,10 @@ name = "nix-ninja"
 version.workspace = true
 edition.workspace = true
 description = "Ninja compatible build system using Nix backend"
+license = "MIT"
 
 [dependencies]
-anyhow = { version = "1.0", features = [ "backtrace" ] }
+anyhow = { version = "1.0", features = ["backtrace"] }
 clap = { version = "4.4", features = ["derive", "env"] }
 deps-infer = { path = "../deps-infer" }
 include-graph = { git = "https://github.com/hinshun/igraph", branch = "performance-improvements" }

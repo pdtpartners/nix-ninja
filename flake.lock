@@ -87,6 +87,26 @@
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1754487366,
+        "narHash": "sha256-pHYj8gUBapuUzKV/kN/tR3Zvqc7o6gdFB9XKXIp1SQ8=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "af66ad14b28a127c5c0f3bbb298218fc63528a18",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_2": {
+      "inputs": {
+        "nixpkgs-lib": [
           "nix",
           "nixpkgs"
         ]
@@ -143,11 +163,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1738008127,
-        "narHash": "sha256-HcN58roxuzfGm/MlcTqUD/wCH9bPdhZmK1xI/t8tSUc=",
+        "lastModified": 1755473597,
+        "narHash": "sha256-SlKOuI5nFhKeY+6YO+QTEJO0RCfWbzWSjj9wW368jvI=",
         "owner": "pdtpartners",
         "repo": "globset",
-        "rev": "9b586e135be867683f212d6e363816c24424084c",
+        "rev": "0cc20aa3180679c1857afa197c813f0cabfe606c",
         "type": "github"
       },
       "original": {
@@ -159,7 +179,7 @@
     "nix": {
       "inputs": {
         "flake-compat": "flake-compat_2",
-        "flake-parts": "flake-parts",
+        "flake-parts": "flake-parts_2",
         "git-hooks-nix": "git-hooks-nix",
         "nixpkgs": "nixpkgs",
         "nixpkgs-23-11": "nixpkgs-23-11",
@@ -230,11 +250,11 @@
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1741310760,
-        "narHash": "sha256-aizILFrPgq/W53Jw8i0a1h1GZAAKtlYOrG/A5r46gVM=",
+        "lastModified": 1755829505,
+        "narHash": "sha256-4/Jd+LkQ2ssw8luQVkqVs9spDBVE6h/u/hC/tzngsPo=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "de0fe301211c267807afd11b12613f5511ff7433",
+        "rev": "f937f8ecd1c70efd7e9f90ba13dfb400cf559de4",
         "type": "github"
       },
       "original": {
@@ -250,6 +270,7 @@
         "crane": "crane",
         "fenix": "fenix",
         "flake-compat": "flake-compat",
+        "flake-parts": "flake-parts",
         "globset": "globset",
         "nix": "nix",
         "nixpkgs": "nixpkgs_2"

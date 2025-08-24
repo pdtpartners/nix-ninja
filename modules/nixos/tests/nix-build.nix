@@ -1,0 +1,73 @@
+# Returns a NixOS test module that strictly exercises the Nix build of an
+# output of nix-ninja flake.
+#
+# It starts the VM with the flake inputs and inputs to the output derivation
+# cached, so the Nix build can run offline and only builds the derivation and
+# nothing more.
+
+# Output name it should `nix build ${self}#${flakeOutput}`.
+{ flakeOutput
+# Inputs of packages it should cache in the VM /nix/store.
+, inputsFrom
+# Expected stdout from the binary it builds.
+, expectedStdout
+}:
+
+{ self, pkgs, lib, ... }:
+let
+  mergeInputs = name:
+    lib.subtractLists inputsFrom (lib.flatten (lib.catAttrs name inputsFrom));
+
+  # Extracted from `pkgs.mkShell` to capture the closure of inputs of a
+  # derivation. I'd like to use `<drv>.inputDerivation` but getting an error
+  # from Nix@2.30 atm:
+  #
+  # ```sh
+  # error: derivation names are allowed to end in '.drv' only if they produce a
+  # single derivation file
+  # ```
+  inputsClosure = pkgs.stdenv.mkDerivation {
+    name = "inputs-for-${flakeOutput}";
+    buildInputs = mergeInputs "buildInputs";
+    nativeBuildInputs = mergeInputs "nativeBuildInputs";
+    propagatedBuildInputs = mergeInputs "propagatedBuildInputs";
+    propagatedNativeBuildInputs = mergeInputs "propagatedNativeBuildInputs";
+
+    phases = [ "buildPhase" ];
+
+    buildPhase = ''
+      export >> "$out"
+    '';
+  };
+
+in {
+  nodes.machine = {
+    virtualisation = {
+      # Closures that are made available to VM, these cache all inputs & flake
+      # inputs so that during the NixOS test it only needs to build the dynamic
+      # derivation.
+      additionalPaths = [
+        inputsClosure
+      ] ++ (builtins.attrValues self.inputs);
+    };
+
+    environment.systemPackages = with pkgs; [
+      git
+      nix-ninja
+      nix-ninja-task
+      nixVersions.nix_2_30
+    ];
+
+    nix.extraOptions = ''
+      experimental-features = nix-command flakes dynamic-derivations ca-derivations recursive-nix
+    '';
+  };
+
+  testScript = ''
+    start_all()
+
+    result = machine.succeed("nix build --print-out-paths ${self}#${flakeOutput}")
+    out = machine.succeed(result)
+    assert "${expectedStdout}" in out
+  '';
+}

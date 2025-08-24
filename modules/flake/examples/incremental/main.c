@@ -2,7 +2,7 @@
 #include "util.h"
 
 int main() {
-  int sum = add(5, 3);
-  printf("Hello! The sum is %d\n", sum);
+  const char* message = msg();
+  printf("Hello %s!\n", message);
   return 0;
 }

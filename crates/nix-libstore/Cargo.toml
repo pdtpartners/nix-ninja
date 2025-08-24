@@ -3,6 +3,7 @@ name = "nix-libstore"
 version.workspace = true
 edition.workspace = true
 description = "Core Nix datastructures"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0"

@@ -14,11 +14,11 @@ pub fn retrieve_c_includes(cmdline: &str) -> Result<Vec<PathBuf>> {
         },
     )?;
 
-    let buf = scanner::read_file_with_nul(&depfile_path)?;
+    let buf = scanner::read_file_with_nul(depfile_path)?;
     let mut scanner = scanner::Scanner::new(&buf);
 
     let depfile = n2::depfile::parse(&mut scanner)
-        .map_err(|err| anyhow!(scanner.format_parse_error(&depfile_path, err)))?;
+        .map_err(|err| anyhow!(scanner.format_parse_error(depfile_path, err)))?;
 
     let mut deps: Vec<PathBuf> = Vec::new();
     for (_, values) in depfile.iter() {

@@ -4,7 +4,6 @@ use nix_libstore::derived_path::SingleDerivedPath;
 use nix_libstore::store_path::StorePath;
 use std::ffi::OsStr;
 use std::io::Write;
-use std::path::PathBuf;
 use std::process::{Command, Output};
 
 /// Configuration for Nix store operations
@@ -40,7 +39,7 @@ impl NixTool {
         let installable = &derived_path.to_string();
         let output = Command::new(&self.config.nix_tool)
             .args(&self.config.extra_args)
-            .args(&["build", "-L", "--no-link", "--print-out-paths", installable])
+            .args(["build", "-L", "--no-link", "--print-out-paths", installable])
             .stderr(std::process::Stdio::inherit())
             .output()?;
 
@@ -53,7 +52,7 @@ impl NixTool {
     }
 
     /// Add a file to the Nix store
-    pub fn store_add(&self, path: &PathBuf) -> Result<StorePath> {
+    pub fn store_add(&self, path: &std::path::Path) -> Result<StorePath> {
         let output = self
             .run_nix_command(&["store", "add", &path.to_string_lossy()])
             .map_err(|err| anyhow!("Failed to store add {}: {}", &path.to_string_lossy(), err))?;
@@ -86,7 +85,7 @@ impl NixTool {
         let mut command = Command::new(&self.config.nix_tool);
         command
             .args(&self.config.extra_args)
-            .args(&["derivation", "add"])
+            .args(["derivation", "add"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());

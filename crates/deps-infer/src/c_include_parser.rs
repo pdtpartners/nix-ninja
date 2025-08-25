@@ -30,9 +30,7 @@ fn bfs_parse_includes(files: Vec<PathBuf>, include_dirs: &[PathBuf]) -> Result<V
 
         // Process all files in the current batch in parallel
         let sources_with_includes = cparse::all_sources_and_includes(
-            current_batch
-                .into_iter()
-                .map(|p| Ok::<_, std::io::Error>(p)),
+            current_batch.into_iter().map(Ok::<_, std::io::Error>),
             include_dirs,
         )?;
 

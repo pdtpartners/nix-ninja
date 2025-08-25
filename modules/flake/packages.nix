@@ -9,7 +9,9 @@
       ;
 
       default = pkgs.nix-ninja;
+    };
 
+    legacyPackages = {
       example-hello = pkgs.example-hello.target;
       example-header = pkgs.example-header.target;
       example-incremental = pkgs.example-incremental.target;

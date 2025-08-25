@@ -1,0 +1,8 @@
+runs:
+  using: composite
+  steps:
+    - uses: DeterminateSystems/nix-installer-action@v19
+      with:
+        extra-conf: |-
+          extra-experimental-features = dynamic-derivations ca-derivations recursive-nix
+    - uses: DeterminateSystems/magic-nix-cache-action@v13

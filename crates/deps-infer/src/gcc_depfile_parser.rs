@@ -19,13 +19,13 @@ impl From<std::io::Error> for DepsError {
 impl std::fmt::Display for DepsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DepsError::ParseError(msg) => write!(f, "Failed to parse command: {}", msg),
-            DepsError::ExecutionError(err) => write!(f, "Execution error: {}", err),
+            DepsError::ParseError(msg) => write!(f, "Failed to parse command: {msg}"),
+            DepsError::ExecutionError(err) => write!(f, "Execution error: {err}"),
             DepsError::UnsupportedCompiler(compiler) => {
-                write!(f, "Unsupported compiler: {}", compiler)
+                write!(f, "Unsupported compiler: {compiler}")
             }
             DepsError::ProcessFailed(code, output) => {
-                write!(f, "Process failed with exit code {}: {}", code, output)
+                write!(f, "Process failed with exit code {code}: {output}")
             }
         }
     }

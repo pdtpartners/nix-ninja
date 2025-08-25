@@ -209,11 +209,11 @@ impl Runner {
     pub fn wait(&mut self, files: &mut graph::GraphFiles) -> Result<BuildId> {
         let result = self.rx.recv().unwrap();
         if let Some(err) = result.err {
-            eprintln!("Error: {}", err);
+            eprintln!("Error: {err}");
 
             eprintln!("Caused by:");
             for cause in err.chain().skip(1) {
-                eprintln!("    {}", cause);
+                eprintln!("    {cause}");
             }
 
             eprintln!("Backtrace: {}", err.backtrace());
@@ -242,9 +242,7 @@ impl Runner {
             None => files.id_from_canonical(path_str),
         };
 
-        if let None = self.derived_files.get(&fid) {
-            self.derived_files.insert(fid, derived_file);
-        }
+        self.derived_files.entry(fid).or_insert(derived_file);
 
         fid
     }
@@ -349,7 +347,7 @@ impl Runner {
         //
         // One way is to parse all the includes, then add it to our search
         // path above.
-        for (_, input) in &self.build_dir_inputs {
+        for input in self.build_dir_inputs.values() {
             input_set.insert(input.source.clone(), input.clone());
         }
 
@@ -363,7 +361,7 @@ impl Runner {
         inputs.sort();
 
         Ok(Task {
-            name: format!("ninja-build-{}", name),
+            name: format!("ninja-build-{name}"),
             system: self.config.system.clone(),
             env_vars: self.env_vars.clone(),
             build_dir: self.config.build_dir.clone(),
@@ -391,9 +389,9 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
     let mut drv = Derivation::new(
         &task.name,
         &task.system,
-        &format!("{}/bin/nix-ninja-task", tools.nix_ninja_task.to_string()),
+        &format!("{}/bin/nix-ninja-task", tools.nix_ninja_task),
     );
-    drv.add_arg(&cmdline);
+    drv.add_arg(cmdline);
 
     if let Some(desc) = &task.desc {
         drv.add_arg(&format!("--description={}", &desc));
@@ -404,14 +402,14 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
         // TODO: Currently necessary because we're using a gcc wrapped by
         // nixpkgs that has implicit deps inside env vars like NIX_LDFLAGS,
         // NIX_CFLAGS_COMPILE. Is there a better way?
-        if !vec!["NIX_LDFLAGS".to_string(), "NIX_CFLAGS_COMPILE".to_string()].contains(key)
+        if !["NIX_LDFLAGS", "NIX_CFLAGS_COMPILE"].contains(&key.as_str())
             && !key.starts_with("NIX_CC_WRAPPER")
         {
             continue;
         }
 
         drv.add_env(key, value);
-        let found_store_paths = extract_store_paths(&task.store_regex, &value)?;
+        let found_store_paths = extract_store_paths(&task.store_regex, value)?;
         for store_path in found_store_paths {
             drv.add_input_src(&store_path.to_string());
         }
@@ -450,7 +448,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
             }
 
             let files: Vec<PathBuf> = file_set.clone().into_iter().collect();
-            let c_includes = c_include_parser::retrieve_c_includes(&cmdline, files)?;
+            let c_includes = c_include_parser::retrieve_c_includes(cmdline, files)?;
 
             for include in c_includes {
                 if let Ok(relative) = include.strip_prefix(&task.store_dir) {
@@ -504,17 +502,17 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
             .ok_or_else(|| anyhow!("No command found in cmdline"))?;
 
         // TODO: If you don't find it it's ok, e.g. ./generated_binary
-        let cmdline_path = which_store_path(&cmdline_binary)?;
+        let cmdline_path = which_store_path(cmdline_binary)?;
 
         drv.add_input_src(&cmdline_path.to_string());
-        path.push(format!("{}/bin", cmdline_path.to_string()));
+        path.push(format!("{cmdline_path}/bin"));
         drv.add_env("PATH", &path.join(":"));
     }
 
     // The cmdline may refer to hardcoded store paths as they were found
     // by the build.ninja generator (e.g. meson). We need to extract them
     // and add as inputSrcs.
-    let found_store_paths = extract_store_paths(&task.store_regex, &cmdline)?;
+    let found_store_paths = extract_store_paths(&task.store_regex, cmdline)?;
     for store_path in found_store_paths {
         drv.add_input_src(&store_path.to_string());
     }
@@ -573,7 +571,11 @@ fn extract_store_paths(store_regex: &Regex, s: &str) -> Result<Vec<StorePath>> {
     Ok(store_paths)
 }
 
-fn new_opaque_file(nix: &NixTool, build_dir: &PathBuf, path: PathBuf) -> Result<DerivedFile> {
+fn new_opaque_file(
+    nix: &NixTool,
+    build_dir: &std::path::Path,
+    path: PathBuf,
+) -> Result<DerivedFile> {
     let relative_path = relative_from(&path, build_dir).unwrap_or(path);
     let mut path = relative_path.to_string_lossy().into_owned();
     canon::canonicalize_path(&mut path);

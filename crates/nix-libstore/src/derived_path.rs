@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::PathBuf;
 
 use crate::placeholder::Placeholder;
@@ -14,13 +15,6 @@ impl SingleDerivedPath {
         match self {
             SingleDerivedPath::Opaque(store_path) => store_path.clone(),
             SingleDerivedPath::Built(built_path) => built_path.drv_path.clone(),
-        }
-    }
-
-    pub fn to_string(&self) -> String {
-        match self {
-            SingleDerivedPath::Opaque(store_path) => store_path.to_string(),
-            SingleDerivedPath::Built(built_path) => built_path.to_string(),
         }
     }
 
@@ -44,8 +38,19 @@ impl SingleDerivedPathBuilt {
     pub fn placeholder(&self) -> PathBuf {
         Placeholder::ca_output(&self.drv_path, &self.output).render()
     }
+}
 
-    pub fn to_string(&self) -> String {
-        format!("{}^{}", &self.drv_path.to_string(), &self.output)
+impl fmt::Display for SingleDerivedPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SingleDerivedPath::Opaque(store_path) => write!(f, "{store_path}"),
+            SingleDerivedPath::Built(built_path) => write!(f, "{built_path}"),
+        }
+    }
+}
+
+impl fmt::Display for SingleDerivedPathBuilt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}^{}", &self.drv_path, &self.output)
     }
 }

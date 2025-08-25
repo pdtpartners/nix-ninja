@@ -57,7 +57,7 @@ in {
           testRigs;
 
 
-      packages =
+      legacyPackages =
         lib.mapAttrs'
           (name: testRig: lib.nameValuePair ("driver-" + name) testRig.driver)
           testRigs;

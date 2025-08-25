@@ -9,6 +9,8 @@
 { flakeOutput
 # Inputs of packages it should cache in the VM /nix/store.
 , inputsFrom
+# Cmdline to run binary from built outPath.
+, cmdline
 # Expected stdout from the binary it builds.
 , expectedStdout
 }:
@@ -66,8 +68,8 @@ in {
   testScript = ''
     start_all()
 
-    result = machine.succeed("nix build --print-out-paths ${self}#${flakeOutput}")
-    out = machine.succeed(result)
+    result = machine.succeed("nix build --print-out-paths ${self}#${flakeOutput}").strip()
+    out = machine.succeed(f"{result}/${cmdline}")
     assert "${expectedStdout}" in out
   '';
 }

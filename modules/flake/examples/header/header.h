@@ -3,5 +3,5 @@
 #include <string>
 
 inline std::string getMessage() {
-    return "Hello dynamic derivations!";
+    return "Hello header example!";
 }

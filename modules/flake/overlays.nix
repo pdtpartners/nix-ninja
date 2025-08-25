@@ -46,6 +46,13 @@
         inherit (self) nix-ninja nix-ninja-task;
       };
 
+      # meson --internal symbolextractor depends on readelf.
+      # meson = super.meson.overrideAttrs(o: {
+      #   buildInputs = (o.buildInputs or []) ++ [
+      #     self.binutils
+      #   ];
+      # });
+
       nix-ninja-llvm-coverage = craneLibLLvmTools.cargoLlvmCov (commonArgs // {
         inherit cargoArtifacts;
       });
@@ -84,9 +91,15 @@
         target = "hello";
       };
 
-      example-incremental = self.mkMesonPackage {
-        name = "example-header";
-        src = ./examples/incremental;
+      example-multi-source = self.mkMesonPackage {
+        name = "example-multi-source";
+        src = ./examples/multi-source;
+        target = "main";
+      };
+
+      example-shared-lib = self.mkMesonPackage {
+        name = "example-shared-lib";
+        src = ./examples/shared-lib;
         target = "main";
       };
 

@@ -17,11 +17,13 @@ impl SingleDerivedPath {
             SingleDerivedPath::Built(built_path) => built_path.drv_path.clone(),
         }
     }
+}
 
-    pub fn to_input(&self) -> PathBuf {
+impl fmt::Display for SingleDerivedPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SingleDerivedPath::Opaque(store_path) => store_path.path().clone(),
-            SingleDerivedPath::Built(built_path) => built_path.placeholder(),
+            SingleDerivedPath::Opaque(store_path) => write!(f, "{store_path}"),
+            SingleDerivedPath::Built(built_path) => write!(f, "{built_path}"),
         }
     }
 }
@@ -37,15 +39,6 @@ pub struct SingleDerivedPathBuilt {
 impl SingleDerivedPathBuilt {
     pub fn placeholder(&self) -> PathBuf {
         Placeholder::ca_output(&self.drv_path, &self.output).render()
-    }
-}
-
-impl fmt::Display for SingleDerivedPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SingleDerivedPath::Opaque(store_path) => write!(f, "{store_path}"),
-            SingleDerivedPath::Built(built_path) => write!(f, "{built_path}"),
-        }
     }
 }
 

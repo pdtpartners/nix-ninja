@@ -22,8 +22,10 @@ use which::which;
 #[derive(Clone)]
 pub struct Tools {
     pub nix: NixTool,
+    pub cc: StorePath,
     pub coreutils: StorePath,
     pub nix_ninja_task: StorePath,
+    pub patchelf: StorePath,
 }
 
 /// Task represents a fully evaluated Ninja build target.
@@ -112,11 +114,18 @@ impl Runner {
         })
     }
 
-    // Build systems like Meson may generate files via `configure_file that are
+    // Build systems like Meson may generate files via `configure_file` that are
     // not listed as implicit inputs in the build.ninja file. So we must read
     // the build directory and consider them implict inputs for all tasks.
     pub fn read_build_dir(&mut self, files: &mut graph::GraphFiles) -> Result<()> {
-        for entry in WalkDir::new(&self.config.build_dir) {
+        for entry in WalkDir::new(&self.config.build_dir)
+            .into_iter()
+            .filter_entry(|e| {
+                // Skip directories that start with "meson-" as they contain
+                // non-deterministic internal data from meson
+                !e.file_name().to_string_lossy().starts_with("meson-")
+            })
+        {
             let entry = entry?;
             if !entry.file_type().is_file() {
                 continue;
@@ -236,7 +245,7 @@ impl Runner {
         files: &mut graph::GraphFiles,
         derived_file: DerivedFile,
     ) -> FileId {
-        let path_str = derived_file.source.to_string_lossy().into_owned();
+        let path_str = derived_file.build_path.to_string_lossy().into_owned();
         let fid = match files.lookup(&path_str) {
             Some(fid) => fid,
             None => files.id_from_canonical(path_str),
@@ -292,7 +301,7 @@ impl Runner {
                     input.to_owned()
                 }
             };
-            input_set.insert(input.source.clone(), input.clone());
+            input_set.insert(input.build_path.clone(), input.clone());
         }
 
         let Some(primary_fid) = build.outs().iter().next() else {
@@ -308,7 +317,7 @@ impl Runner {
             let placeholder = Placeholder::standard_output(&normalized_name);
             let output = DerivedOutput {
                 placeholder,
-                source: PathBuf::from(&file.name),
+                build_path: PathBuf::from(&file.name),
             };
             outputs.push(output);
         }
@@ -334,7 +343,7 @@ impl Runner {
                         }
                     },
                 };
-                input_set.insert(input.source.clone(), input.clone());
+                input_set.insert(input.build_path.clone(), input.clone());
             }
         }
 
@@ -348,12 +357,12 @@ impl Runner {
         // One way is to parse all the includes, then add it to our search
         // path above.
         for input in self.build_dir_inputs.values() {
-            input_set.insert(input.source.clone(), input.clone());
+            input_set.insert(input.build_path.clone(), input.clone());
         }
 
         if let Some(extra_inputs) = self.extra_inputs.get(&bid) {
             for input in extra_inputs {
-                input_set.insert(input.source.clone(), input.clone());
+                input_set.insert(input.build_path.clone(), input.clone());
             }
         }
 
@@ -394,7 +403,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
     drv.add_arg(cmdline);
 
     if let Some(desc) = &task.desc {
-        drv.add_arg(&format!("--description={}", &desc));
+        drv.add_arg(&format!("--description={desc}"));
     }
 
     // Propagate env var from build environment to the task.
@@ -416,8 +425,10 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
     }
 
     // Needed by all tasks.
-    drv.add_input_src(&tools.coreutils.to_string())
-        .add_input_src(&tools.nix_ninja_task.to_string());
+    drv.add_input_src(&tools.cc.to_string())
+        .add_input_src(&tools.coreutils.to_string())
+        .add_input_src(&tools.nix_ninja_task.to_string())
+        .add_input_src(&tools.patchelf.to_string());
 
     // Add all ninja build inputs.
     let mut input_set: HashSet<String> = HashSet::new();
@@ -439,7 +450,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
             // Only explict inputs are processed by gcc.
             for input in &task.inputs {
                 let source = match input.path {
-                    SingleDerivedPath::Opaque(_) => input.source.clone(),
+                    SingleDerivedPath::Opaque(_) => input.build_path.clone(),
                     SingleDerivedPath::Built(_) => {
                         continue;
                     }
@@ -461,7 +472,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
 
                 let derived_file = new_opaque_file(&tools.nix, &task.build_dir, include)?;
                 // Skip paths that are already in the task inputs.
-                if file_set.contains(&derived_file.source) {
+                if file_set.contains(&derived_file.build_path) {
                     continue;
                 }
 
@@ -476,14 +487,17 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
         }
     }
 
-    let inputs: Vec<String> = input_set.into_iter().collect();
+    // Sort NIX_NINJA_INPUTS to ensure determinism.
+    let mut inputs: Vec<String> = input_set.into_iter().collect();
+    inputs.sort();
+
     drv.add_env("NIX_NINJA_INPUTS", &inputs.join(" "));
 
     // Add all ninja build outputs.
     let mut outputs: Vec<String> = Vec::new();
     for output in &task.outputs {
         // Declare a content addressed output.
-        let normalized_name = normalize_output(&output.source.to_string_lossy());
+        let normalized_name = normalize_output(&output.build_path.to_string_lossy());
         drv.add_ca_output(&normalized_name, HashAlgorithm::Sha256, OutputHashMode::Nar);
 
         // Encode output for nix-ninja-task.
@@ -494,7 +508,11 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
 
     {
         // Prepare $PATH to have coreutils.
-        let mut path: Vec<String> = vec![format!("{}/bin", tools.coreutils.to_string())];
+        let mut path: Vec<String> = vec![
+            format!("{}/bin", tools.cc),
+            format!("{}/bin", tools.coreutils),
+            format!("{}/bin", tools.patchelf),
+        ];
 
         let cmdline_binary = cmdline
             .split_whitespace()
@@ -584,7 +602,8 @@ fn new_opaque_file(
     let store_path = nix.store_add(&canonical_path)?;
     Ok(DerivedFile {
         path: SingleDerivedPath::Opaque(store_path.clone()),
-        source: relative_path,
+        build_path: relative_path,
+        rel_path: None, // None for opaque files - store path points directly to file
     })
 }
 
@@ -595,7 +614,8 @@ fn new_built_file(drv_path: &StorePath, path: PathBuf) -> DerivedFile {
     };
     DerivedFile {
         path: SingleDerivedPath::Built(derived_built),
-        source: path,
+        build_path: path.clone(),
+        rel_path: Some(path), // For built files, rel_path same as build_path
     }
 }
 

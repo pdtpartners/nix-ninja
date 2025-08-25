@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v19
-      - uses: DeterminateSystems/magic-nix-cache-action@v13
+      - name: Setup Nix
+        uses: ./.github/actions/setup-nix
       - name: Cache Rust Artifacts
         uses: actions/cache@v4
         env:
@@ -31,6 +31,15 @@ jobs:
           cargo clippy
           cargo test
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Nix
+        uses: ./.github/actions/setup-nix
+      - name: Run nix flake check
+        run: nix flake check -L
+
   integration-test:
     runs-on: ubuntu-latest
     strategy:
@@ -41,11 +50,8 @@ jobs:
           - nix-build-incremental
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v19
-        with:
-          extra-conf: |-
-            extra-experimental-features = dynamic-derivations ca-derivations recursive-nix
-      - uses: DeterminateSystems/magic-nix-cache-action@v13
+      - name: Setup Nix
+        uses: ./.github/actions/setup-nix
       - name: Build NixOS test driver
         run: nix build .#driver-${{ matrix.test }}
       - name: Run integration tests

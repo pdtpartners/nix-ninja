@@ -4,7 +4,7 @@ fn main() {
     let exit_code = match cli::run() {
         Ok(code) => code,
         Err(err) => {
-            println!("nix-ninja: err: {}", err);
+            println!("nix-ninja: err: {err}");
             1
         }
     };

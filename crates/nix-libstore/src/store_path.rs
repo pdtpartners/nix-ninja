@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use std::fmt;
 use std::path::PathBuf;
 
 /// A Nix store path
@@ -57,12 +58,14 @@ impl StorePath {
         &self.path
     }
 
-    pub fn to_string(&self) -> String {
-        self.path.to_string_lossy().into_owned()
-    }
-
     /// Check if this is a derivation path
     pub fn is_derivation(&self) -> bool {
         self.name().ends_with(".drv")
+    }
+}
+
+impl fmt::Display for StorePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.path.to_string_lossy())
     }
 }

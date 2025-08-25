@@ -50,7 +50,7 @@ pub fn build(
 
     // TODO: Support multiple targets, probably treat it like a dynamically
     // generated phony target.
-    let Some(name) = targets.iter().next() else {
+    let Some(name) = targets.first() else {
         return Err(anyhow!("unimplemented"));
     };
     let fid = scheduler
@@ -244,7 +244,7 @@ impl<'a> Scheduler<'a> {
 
     pub fn want_file(&mut self, fid: FileId) -> Result<()> {
         let mut stack = Vec::new();
-        self.build_states.want_file(&self.graph, &mut stack, fid)?;
+        self.build_states.want_file(self.graph, &mut stack, fid)?;
         Ok(())
     }
 

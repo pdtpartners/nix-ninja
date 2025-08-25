@@ -96,14 +96,14 @@ pub fn run() -> Result<i32> {
         Ok(derived_file) => {
             if cli.is_output_derivation {
                 let out = env::var("out").map_err(|_| anyhow!("Expected $out to be set"))?;
-                fs::copy(&derived_file.path.store_path().path(), out)?;
+                fs::copy(derived_file.path.store_path().path(), out)?;
             } else {
                 nix_build(&cli, &derived_file)?;
             }
             Ok(0)
         }
         Err(err) => {
-            println!("nix-ninja: {}", err);
+            println!("nix-ninja: {err}");
             Ok(1)
         }
     }
@@ -138,7 +138,7 @@ fn nix_build(cli: &Cli, derived_file: &DerivedFile) -> Result<()> {
     if derived_file.source.exists() {
         fs::remove_file(&derived_file.source)?;
     }
-    symlink(&drv_output.path(), &derived_file.source)?;
+    symlink(drv_output.path(), &derived_file.source)?;
 
     Ok(())
 }
@@ -158,7 +158,7 @@ fn subtool(cli: &Cli, tool: &str) -> Result<i32> {
             let derived_file = build(cli)?;
             let output = nix.derivation_show(&derived_file.path.store_path())?;
             let stdout = str::from_utf8(&output.stdout)?;
-            println!("{}", stdout);
+            println!("{stdout}");
         }
         // Meson compatibility tools.
         "restat" | "clean" | "cleandead" | "compdb" => {
@@ -167,8 +167,7 @@ fn subtool(cli: &Cli, tool: &str) -> Result<i32> {
         }
         _ => {
             println!(
-                "Unknown subtool '{}'. Use '-t list' to get a list of available subtools.",
-                tool
+                "Unknown subtool '{tool}'. Use '-t list' to get a list of available subtools."
             );
             return Ok(1);
         }

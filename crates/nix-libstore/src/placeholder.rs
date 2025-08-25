@@ -24,7 +24,7 @@ impl Placeholder {
 
     /// Generate a placeholder for a standard output
     pub fn standard_output(output_name: &str) -> Self {
-        let clear_text = format!("nix-output:{}", output_name);
+        let clear_text = format!("nix-output:{output_name}");
         let hash = sha256_hash(clear_text.as_bytes());
         Self::new(hash)
     }
@@ -57,7 +57,7 @@ impl Placeholder {
         let compressed = compress_hash(&placeholder.hash, 20);
 
         let compressed_str = nix_base32::to_nix_base32(&compressed);
-        let clear_text = format!("nix-computed-output:{}:{}", compressed_str, output_name);
+        let clear_text = format!("nix-computed-output:{compressed_str}:{output_name}");
 
         let hash = sha256_hash(clear_text.as_bytes());
         Self::new(hash)
@@ -71,7 +71,7 @@ impl TryFrom<String> for Placeholder {
         let hash = match nix_base32::from_nix_base32(&str) {
             Some(h) => h,
             None => {
-                return Err(anyhow!("Not valid nix base32 string: {}", str));
+                return Err(anyhow!("Not valid nix base32 string: {str}"));
             }
         };
 
@@ -84,7 +84,7 @@ pub fn output_path_name(drv_name: &str, output_name: &str) -> String {
     if output_name == "out" {
         drv_name.to_string()
     } else {
-        format!("{}-{}", drv_name, output_name)
+        format!("{drv_name}-{output_name}")
     }
 }
 

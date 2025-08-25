@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use nix_libstore::store_path::StorePath;
 use nix_libstore::{derived_path::SingleDerivedPath, prelude::Placeholder};
+use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -10,10 +11,6 @@ pub struct DerivedFile {
 }
 
 impl DerivedFile {
-    pub fn to_string(&self) -> String {
-        self.path.to_string()
-    }
-
     pub fn to_encoded(&self) -> String {
         format!(
             "{}:{}",
@@ -37,6 +34,12 @@ impl DerivedFile {
         let source = PathBuf::from(parts[1]);
 
         Ok(DerivedFile { path, source })
+    }
+}
+
+impl fmt::Display for DerivedFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.path)
     }
 }
 

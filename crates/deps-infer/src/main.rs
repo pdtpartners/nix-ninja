@@ -128,14 +128,11 @@ fn load_targets(build_filename: &str) -> Result<Vec<Target>> {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
-        match ext.as_str() {
-            "o" => {
-                targets.push(Target {
-                    filename: primary_file.name.to_string(),
-                    cmdline: cmdline.to_string(),
-                });
-            }
-            _ => {}
+        if ext.as_str() == "o" {
+            targets.push(Target {
+                filename: primary_file.name.to_string(),
+                cmdline: cmdline.to_string(),
+            });
         }
     }
 
@@ -195,15 +192,9 @@ fn run_benchmark_mode(targets: Vec<Target>) -> Result<()> {
     if gcc_ms > 0.0 && c_ms > 0.0 {
         let percentage_diff = (gcc_ms / c_ms) * 100.0;
         if percentage_diff > 0.0 {
-            println!(
-                "C include parser is {:.2}% faster than GCC depfile method",
-                percentage_diff
-            );
+            println!("C include parser is {percentage_diff:.2}% faster than GCC depfile method");
         } else {
-            println!(
-                "C include parser is {:.2}% slower than GCC depfile method",
-                percentage_diff
-            );
+            println!("C include parser is {percentage_diff:.2}% slower than GCC depfile method");
         }
     }
 
@@ -235,7 +226,7 @@ fn run_correctness_mode(targets: Vec<Target>) -> Result<()> {
             .filter(|path| !c_includes.contains(path))
             .collect();
 
-        if gcc_only.len() > 0 {
+        if !gcc_only.is_empty() {
             println!("Mismatch for {}", target.filename);
 
             // Find items in c_includes but not in gcc_includes

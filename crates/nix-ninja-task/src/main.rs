@@ -82,7 +82,7 @@ fn main() -> Result<()> {
     println!("nix-ninja-task: Running: /bin/sh -c \"{}\"", &cli.cmdline);
     let exit_code = spawn_process(cli.cmdline)?;
     if exit_code != 0 {
-        println!("nix-ninja-task: Failed with exit code {}", exit_code);
+        println!("nix-ninja-task: Failed with exit code {exit_code}");
         std::process::exit(exit_code);
     }
 
@@ -95,7 +95,7 @@ fn main() -> Result<()> {
         outputs.len(),
     );
     for output in &outputs {
-        fs::copy(&output.source, &output.to_string())?;
+        fs::copy(&output.source, output.to_string())?;
     }
 
     Ok(())
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
 ///
 /// For each derived file, creates a symlink at `prefix/${derived_file.source}`
 /// pointing to the actual file at `derived_file.path`.
-fn create_symlinks(prefix: &PathBuf, inputs: Vec<DerivedFile>) -> Result<()> {
+fn create_symlinks(prefix: &std::path::Path, inputs: Vec<DerivedFile>) -> Result<()> {
     for input in inputs {
         // Get the source path (where the symlink points to)
         let source_path = input.to_string();
@@ -136,7 +136,7 @@ fn create_parent_dirs(outputs: &Vec<DerivedFile>) -> Result<()> {
     let mut dirs: Vec<&std::path::Path> = Vec::new();
     for output in outputs {
         if let Some(parent) = output.source.parent() {
-            if dirs.iter().any(|&p| p == parent) {
+            if dirs.contains(&parent) {
                 continue;
             }
             std::fs::create_dir_all(parent)?;

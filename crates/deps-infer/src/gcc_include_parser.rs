@@ -25,8 +25,8 @@ pub fn parse_include_dirs(cmdline: &str) -> Result<Vec<PathBuf>> {
             i += 1; // Skip the next argument as we've consumed it
         }
         // Case 3: -I=dir (with equals sign)
-        else if arg.starts_with("-I=") {
-            include_dirs.push(arg[3..].to_string().into());
+        else if let Some(stripped) = arg.strip_prefix("-I=") {
+            include_dirs.push(stripped.to_string().into());
         }
 
         i += 1;
@@ -41,7 +41,7 @@ mod tests {
 
     // Helper function to convert string slices to PathBufs
     fn paths(dirs: &[&str]) -> Vec<PathBuf> {
-        dirs.iter().map(|d| PathBuf::from(d)).collect()
+        dirs.iter().map(PathBuf::from).collect()
     }
 
     #[test]

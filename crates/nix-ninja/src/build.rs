@@ -14,7 +14,7 @@ pub struct BuildConfig {
     pub build_dir: PathBuf,
     pub store_dir: PathBuf,
     pub nix_tool: String,
-    pub extra_inputs: Vec<String>,
+    pub is_output_derivation: bool,
 }
 
 pub fn build(
@@ -29,13 +29,7 @@ pub fn build(
         extra_args: Vec::new(),
     });
 
-    let tools = task::Tools {
-        nix,
-        cc: task::which_store_path("cc")?,
-        coreutils: task::which_store_path("coreutils")?,
-        nix_ninja_task: task::which_store_path("nix-ninja-task")?,
-        patchelf: task::which_store_path("patchelf")?,
-    };
+    let tools = task::Tools::new(nix)?;
 
     let mut runner = task::Runner::new(
         tools,
@@ -43,10 +37,10 @@ pub fn build(
             system: "x86_64-linux".to_string(),
             build_dir: config.build_dir,
             store_dir: config.store_dir,
+            is_output_derivation: config.is_output_derivation,
         },
     )?;
     runner.read_build_dir(&mut loader.graph.files)?;
-    runner.add_extra_inputs(&mut loader.graph.files, config.extra_inputs)?;
 
     let mut scheduler = Scheduler::new(&mut loader.graph, &mut runner);
 

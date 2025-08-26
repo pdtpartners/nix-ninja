@@ -1,10 +1,15 @@
 use crate::build::{self, BuildConfig};
+use crate::local;
+use crate::subtool::dynamic_task;
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use nix_libstore::store_path::StorePath;
 use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::{NixTool, StoreConfig};
-use std::{env, fs, os::unix::fs::symlink, path::PathBuf, str};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    str,
+};
 
 #[derive(Parser)]
 #[command(
@@ -52,22 +57,6 @@ pub struct Cli {
     #[arg(long, default_value = "false", env = "NIX_NINJA_DRV", hide = true)]
     pub is_output_derivation: bool,
 
-    /// Until we dynamically create derivations that can infer C dependencies
-    /// on derivation outputs, we have this hack to inject additional inputs
-    /// that are inferred and source-linked into the nix-ninja-task
-    /// environment.
-    ///
-    /// For example, Nix uses Bison to generate a parser-tab.cc from a
-    /// .parser.y. The parser-tab.cc depends on finally.hh but we cannot
-    /// determine it during nix-ninja build-time, only at nix-ninja-task
-    /// build-time.
-    #[arg(
-        long = "extra-inputs",
-        env = "NIX_NINJA_EXTRA_INPUTS",
-        value_delimiter = ','
-    )]
-    pub extra_inputs: Vec<String>,
-
     /// Target to build (only used with certain subtools)
     #[arg(trailing_var_arg = true)]
     pub targets: Vec<String>,
@@ -86,19 +75,31 @@ pub fn run() -> Result<i32> {
     if let Some(dir) = &cli.dir {
         std::env::set_current_dir(dir)?;
     }
+    let build_dir = std::env::current_dir()?;
+
+    let nix_tool = NixTool::new(StoreConfig {
+        nix_tool: cli.nix_tool.clone(),
+        extra_args: Vec::new(),
+    });
 
     // Handle subtool if specified
     if let Some(tool) = cli.tool.clone() {
-        return subtool(&cli, &tool);
+        return subtool(
+            nix_tool,
+            &build_dir,
+            cli.store_dir.as_path(),
+            &tool,
+            cli.targets.clone(),
+        );
     }
 
-    match build(&cli) {
+    match build(&cli, &build_dir) {
         Ok(derived_file) => {
             if cli.is_output_derivation {
                 let out = env::var("out").map_err(|_| anyhow!("Expected $out to be set"))?;
-                fs::copy(derived_file.path.store_path().path(), out)?;
+                fs::copy(derived_file.derived_path.store_path().path(), out)?;
             } else {
-                nix_build(&cli, &derived_file)?;
+                local::symlink_derived_files(&nix_tool, &build_dir, &[derived_file])?;
             }
             Ok(0)
         }
@@ -109,13 +110,12 @@ pub fn run() -> Result<i32> {
     }
 }
 
-fn build(cli: &Cli) -> Result<DerivedFile> {
-    let build_dir = std::env::current_dir()?;
+fn build(cli: &Cli, build_dir: &Path) -> Result<DerivedFile> {
     let config = BuildConfig {
-        build_dir,
+        build_dir: build_dir.to_path_buf(),
         store_dir: cli.store_dir.clone(),
         nix_tool: cli.nix_tool.clone(),
-        extra_inputs: cli.extra_inputs.clone(),
+        is_output_derivation: cli.is_output_derivation,
     };
 
     build::build(
@@ -125,46 +125,28 @@ fn build(cli: &Cli) -> Result<DerivedFile> {
     )
 }
 
-fn nix_build(cli: &Cli, derived_file: &DerivedFile) -> Result<()> {
-    let nix = NixTool::new(StoreConfig {
-        nix_tool: cli.nix_tool.clone(),
-        extra_args: Vec::new(),
-    });
-
-    let output = nix.build(&derived_file.path)?;
-    let stdout = str::from_utf8(&output.stdout)?;
-    let drv_output = StorePath::new(stdout.trim())?;
-
-    let symlink_source = if let Some(rel_path) = &derived_file.rel_path {
-        drv_output.path().join(rel_path)
-    } else {
-        drv_output.path().to_path_buf()
-    };
-
-    if derived_file.build_path.exists() {
-        fs::remove_file(&derived_file.build_path)?;
-    }
-    symlink(symlink_source, &derived_file.build_path)?;
-
-    Ok(())
-}
-
-fn subtool(cli: &Cli, tool: &str) -> Result<i32> {
-    match tool {
+fn subtool(
+    nix_tool: NixTool,
+    build_dir: &Path,
+    store_dir: &Path,
+    subtool_name: &str,
+    targets: Vec<String>,
+) -> Result<i32> {
+    match subtool_name {
         "list" => {
             println!("nix-ninja subtools:");
-            println!("  drv     show Nix derivation generated for a target");
+            println!("  drv           show Nix derivation generated for a target");
+            println!("  dynamic-task  generate task derivation from task + discovered deps");
         }
         "drv" => {
-            let nix = NixTool::new(StoreConfig {
-                nix_tool: cli.nix_tool.clone(),
-                extra_args: Vec::new(),
-            });
-
-            let derived_file = build(cli)?;
-            let output = nix.derivation_show(&derived_file.path.store_path())?;
+            let cli = Cli::parse();
+            let derived_file = build(&cli, build_dir)?;
+            let output = nix_tool.derivation_show(&derived_file.derived_path.store_path())?;
             let stdout = str::from_utf8(&output.stdout)?;
             println!("{stdout}");
+        }
+        "dynamic-task" => {
+            return Ok(dynamic_task_subtool(nix_tool, store_dir, targets));
         }
         // Meson compatibility tools.
         "restat" | "clean" | "cleandead" | "compdb" => {
@@ -173,10 +155,20 @@ fn subtool(cli: &Cli, tool: &str) -> Result<i32> {
         }
         _ => {
             println!(
-                "Unknown subtool '{tool}'. Use '-t list' to get a list of available subtools."
+                "Unknown subtool '{subtool_name}'. Use '-t list' to get a list of available subtools."
             );
             return Ok(1);
         }
     }
     Ok(0)
+}
+
+fn dynamic_task_subtool(nix_tool: NixTool, store_dir: &Path, targets: Vec<String>) -> i32 {
+    match dynamic_task::run(nix_tool, store_dir, targets) {
+        Ok(code) => code,
+        Err(err) => {
+            eprintln!("nix-ninja-dynamic-task: {err}");
+            1
+        }
+    }
 }

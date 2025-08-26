@@ -129,6 +129,9 @@ persisted betwen runs, but then inside nixpkgs it'll just use `mkMesonPackage`.
 
 ### Dependency inference on generated source files
 
+NOTE: This is now done and we have removed `$NIX_NINJA_EXTRA_INPUTS`, please
+see [dynamic dependencies] for how this is solved.
+
 In `NixOS/nix`, `bison` is used to generate a `parser-tab.cc` and
 `parser.tab.hh` file. These files include other headers so there's a need to
 do dependency inference then too.
@@ -205,3 +208,4 @@ absolute paths to binaries.
 [turtle]: https://github.com/raviqqe/turtle-build
 [n2]: https://github.com/evmar/n2
 [dynamic derivations]: ./dynamic-derivations.md
+[dynamic dependencies]: ./dynamic-deps.md

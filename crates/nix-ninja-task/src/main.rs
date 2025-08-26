@@ -1,11 +1,10 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::command;
 use clap::Parser;
-use nix_ninja_task::derived_file::DerivedFile;
+use nix_ninja_task::derived_file::{create_symlinks, DerivedFile};
 use nix_ninja_task::patchelf;
 use std::env;
 use std::fs;
-use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -60,13 +59,17 @@ fn main() -> Result<()> {
     // symlinked while preserving the original directory hierarchy of the
     // sources. This ensures relative includes and other path-dependent
     // references remain valid.
-    create_symlinks(&cli.build_dir, inputs)?;
+    create_symlinks(&cli.build_dir, inputs, false)?;
     println!(
         "nix-ninja-task: Setup source directory in {}",
         cli.build_dir.display()
     );
 
-    create_parent_dirs(&outputs)?;
+    // Outputs are written to the same directory structure as the build
+    // directory because if the output is a shared library the filename must
+    // match the soname and it must be in a directory to add to the linking
+    // binary's RUNPATH.
+    create_output_dirs(&outputs)?;
 
     if let Some(desc) = cli.description {
         println!("nix-ninja-task: {desc}");
@@ -74,7 +77,7 @@ fn main() -> Result<()> {
 
     // Spawn cmdline process via sh like ninja upstream does.
     println!("nix-ninja-task: Running: /bin/sh -c \"{}\"", cli.cmdline);
-    let exit_code = spawn_process(cli.cmdline)?;
+    let exit_code = spawn_process(&cli.cmdline)?;
     if exit_code != 0 {
         println!("nix-ninja-task: Failed with exit code {exit_code}");
         std::process::exit(exit_code);
@@ -103,40 +106,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Creates symlinks for derived files under the specified prefix.
-///
-/// For each derived file, creates a symlink at `prefix/${derived_file.build_path}`
-/// pointing to the actual file at `derived_file.path`.
-fn create_symlinks(prefix: &std::path::Path, inputs: Vec<DerivedFile>) -> Result<()> {
-    for input in inputs {
-        let source_path = input.to_string();
-        let dest_path = prefix.join(&input.build_path);
-
-        // Create parent directories if they don't exist
-        if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        if !std::path::Path::new(&source_path).exists() {
-            return Err(anyhow!(
-                "nix-ninja-task: symlink source does not exist: {source_path}"
-            ));
-        }
-
-        symlink(&source_path, &dest_path).map_err(|e| {
-            anyhow!(
-                "Failed to create symlink from {} to {}: {}",
-                source_path,
-                dest_path.display(),
-                e
-            )
-        })?;
-    }
-
-    Ok(())
-}
-
-fn create_parent_dirs(outputs: &Vec<DerivedFile>) -> Result<()> {
+fn create_output_dirs(outputs: &Vec<DerivedFile>) -> Result<()> {
     let mut dirs: Vec<&std::path::Path> = Vec::new();
     for output in outputs {
         if let Some(parent) = output.build_path.parent() {
@@ -150,9 +120,9 @@ fn create_parent_dirs(outputs: &Vec<DerivedFile>) -> Result<()> {
     Ok(())
 }
 
-fn spawn_process(cmdline: String) -> Result<i32> {
+fn spawn_process(cmdline: &str) -> Result<i32> {
     let mut cmd = Command::new("/bin/sh");
-    cmd.args(["-c", &cmdline])
+    cmd.args(["-c", cmdline])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .envs(env::vars());

@@ -1,4 +1,6 @@
+use crate::local;
 use crate::relative_from::relative_from;
+use crate::subtool::dynamic_task;
 use anyhow::{anyhow, Error, Result};
 use deps_infer::c_include_parser;
 use n2::{
@@ -9,38 +11,56 @@ use nix_libstore::prelude::*;
 use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::NixTool;
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
     ops::Deref,
-    path::PathBuf,
-    sync::mpsc,
+    path::{Path, PathBuf},
+    sync::{mpsc, Arc, Mutex},
 };
 use walkdir::WalkDir;
 use which::which;
 
 #[derive(Clone)]
 pub struct Tools {
-    pub nix: NixTool,
     pub cc: StorePath,
     pub coreutils: StorePath,
+    pub nix: StorePath,
+    pub nix_tool: NixTool,
+    pub nix_ninja: StorePath,
     pub nix_ninja_task: StorePath,
     pub patchelf: StorePath,
+}
+
+impl Tools {
+    pub fn new(nix_tool: NixTool) -> Result<Self> {
+        Ok(Tools {
+            cc: which_store_path("cc")?,
+            coreutils: which_store_path("coreutils")?,
+            nix: which_store_path("nix")?,
+            nix_tool,
+            nix_ninja: which_store_path("nix-ninja")?,
+            nix_ninja_task: which_store_path("nix-ninja-task")?,
+            patchelf: which_store_path("patchelf")?,
+        })
+    }
 }
 
 /// Task represents a fully evaluated Ninja build target.
 ///
 /// A task contains all the context to generate a Nix derivation for the build
 /// target.
+#[derive(Clone)]
 struct Task {
     name: String,
     system: String,
-    env_vars: HashMap<String, String>,
+    wrapper_vars: HashMap<String, String>,
+    input_srcs: Vec<StorePath>,
 
     build_dir: PathBuf,
     build_deps: BuildDependencies,
     store_dir: PathBuf,
-    store_regex: Regex,
 
     cmdline: Option<String>,
     desc: Option<String>,
@@ -62,28 +82,32 @@ impl Deref for Task {
 /// BuildResult is the output of a Task.
 pub struct BuildResult {
     pub bid: BuildId,
+    pub derived_path: Option<SingleDerivedPath>,
     pub derived_files: Vec<DerivedFile>,
     pub err: Option<Error>,
 }
 
+#[derive(Clone)]
 pub struct RunnerConfig {
     pub system: String,
     pub build_dir: PathBuf,
     pub store_dir: PathBuf,
+    pub is_output_derivation: bool,
 }
 
 /// Runner is an async runtime that spawns threads for each task.
 pub struct Runner {
     pub derived_files: HashMap<FileId, DerivedFile>,
     build_dir_inputs: HashMap<FileId, DerivedFile>,
-    extra_inputs: HashMap<BuildId, Vec<DerivedFile>>,
 
     tx: mpsc::Sender<BuildResult>,
     rx: mpsc::Receiver<BuildResult>,
     tools: Tools,
     config: RunnerConfig,
-    env_vars: HashMap<String, String>,
+    wrapper_vars: HashMap<String, String>,
+    wrapper_store_paths: Vec<StorePath>,
     store_regex: Regex,
+    nix_build_lock: Arc<Mutex<()>>,
 }
 
 impl Runner {
@@ -95,22 +119,42 @@ impl Runner {
         );
         let store_regex = Regex::new(&pattern)?;
 
-        let mut env_vars = HashMap::new();
+        let mut wrapper_vars = HashMap::new();
         for (key, value) in env::vars() {
-            env_vars.insert(key, value);
+            if ["NIX_LDFLAGS", "NIX_CFLAGS_COMPILE"].contains(&key.as_str())
+                || key.starts_with("NIX_CC_WRAPPER")
+                || key.starts_with("NIX_BINTOOLS_WRAPPER")
+            {
+                wrapper_vars.insert(key, value);
+            }
+        }
+
+        // Remove -frandom-seed from NIX_CFLAGS_COMPILE as we'll calculate it
+        // per task derivation. Otherwise this will be different every time
+        // breaking incrementality.
+        if let Some(cflags) = wrapper_vars.get_mut("NIX_CFLAGS_COMPILE") {
+            *cflags = remove_frandom_seed(cflags);
+        }
+
+        // Extract store paths from wrapper variables once
+        let mut wrapper_store_paths = Vec::new();
+        for value in wrapper_vars.values() {
+            let found_store_paths = extract_store_paths(&store_regex, value)?;
+            wrapper_store_paths.extend(found_store_paths);
         }
 
         let (tx, rx) = mpsc::channel();
         Ok(Runner {
             derived_files: HashMap::new(),
             build_dir_inputs: HashMap::new(),
-            extra_inputs: HashMap::new(),
             tx,
             rx,
             tools,
             config,
-            env_vars,
+            wrapper_vars,
+            wrapper_store_paths,
             store_regex,
+            nix_build_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -133,57 +177,10 @@ impl Runner {
 
             let path = entry.into_path();
             let derived_file =
-                new_opaque_file(&self.tools.nix, &self.config.build_dir, path.clone())?;
+                new_opaque_file(&self.tools.nix_tool, &self.config.build_dir, path.clone())?;
             let fid = self.add_derived_file(files, derived_file.clone());
             self.build_dir_inputs.insert(fid, derived_file);
         }
-        Ok(())
-    }
-
-    pub fn add_extra_inputs(
-        &mut self,
-        files: &mut graph::GraphFiles,
-        encoded_inputs: Vec<String>,
-    ) -> Result<()> {
-        for encoded in encoded_inputs {
-            // Split by colon to separate path from source
-            let parts: Vec<&str> = encoded.split(':').collect();
-            if parts.len() != 2 {
-                return Err(anyhow!(
-                    "Expected one ':' in encoded input but got {}",
-                    encoded
-                ));
-            }
-            let (target, extra_input_path) = (parts[0], PathBuf::from(parts[1]));
-
-            let Some(fid) = files.lookup(target) else {
-                return Err(anyhow!("Could not find target in extra input: {}", target));
-            };
-
-            let file = &files.by_id[fid];
-            let Some(bid) = file.input else {
-                return Err(anyhow!(
-                    "Target in extra input is not an output of a build: {}",
-                    target
-                ));
-            };
-
-            let mut extra_inputs = match self.extra_inputs.get(&bid) {
-                Some(extra_inputs) => extra_inputs.to_owned(),
-                None => Vec::new(),
-            };
-
-            let derived_file = new_opaque_file(
-                &self.tools.nix,
-                &self.config.build_dir,
-                extra_input_path.clone(),
-            )?;
-            self.add_derived_file(files, derived_file.clone());
-
-            extra_inputs.push(derived_file);
-            self.extra_inputs.insert(bid, extra_inputs);
-        }
-
         Ok(())
     }
 
@@ -196,16 +193,43 @@ impl Runner {
         let tx = self.tx.clone();
 
         let tools = self.tools.clone();
-        let task = self.new_task(files, bid, build)?;
+        let task = self.new_task(files, build)?;
 
+        let config = self.config.clone();
+        let nix_build_lock = self.nix_build_lock.clone();
         std::thread::spawn(move || {
-            let (derived_files, err) = match build_task_derivation(tools, task) {
-                Ok(derived_files) => (derived_files, None),
-                Err(err) => (Vec::new(), Some(err)),
+            let (derived_path, err) =
+                match build_task_derivation(tools.clone(), task.clone()) {
+                    Ok(drv) => match handle_derivation_result(
+                        tools.clone(),
+                        task.clone(),
+                        drv.clone(),
+                        &config,
+                        nix_build_lock,
+                    ) {
+                        Ok(final_derived_path) => (Some(final_derived_path), None),
+                        Err(err) => (None, Some(err.context(format!("Failed to handle derivation result for task '{}' (derivation: {})\nDerivation JSON:\n{}", task.name, drv.name, drv.to_json_pretty().unwrap_or_else(|_| "Failed to serialize derivation".to_string()))))),
+                    },
+                    Err(err) => (None, Some(err.context(format!("Failed to build task derivation for task '{}'", task.name)))),
+                };
+
+            // Create DerivedFiles for all outputs if successful
+            let derived_files = if let Some(ref final_derived_path) = derived_path {
+                let mut drv_outputs: Vec<DerivedFile> = Vec::new();
+                for fid in task.outs() {
+                    let file = &task.files[fid];
+                    let built_file =
+                        new_built_file(final_derived_path.clone(), file.name.clone().into());
+                    drv_outputs.push(built_file);
+                }
+                drv_outputs
+            } else {
+                Vec::new()
             };
 
             let result = BuildResult {
                 bid,
+                derived_path,
                 derived_files,
                 err,
             };
@@ -226,9 +250,16 @@ impl Runner {
             }
 
             eprintln!("Backtrace: {}", err.backtrace());
+
+            let debug_info = if let Some(derived_path) = &result.derived_path {
+                format!("derivation: {derived_path}")
+            } else {
+                format!("build_id: {:?}", result.bid)
+            };
+
             return Err(anyhow!(
-                "Failed to build task derivation for {:?}: {}",
-                result.bid,
+                "Failed to build task derivation for {}: {}",
+                debug_info,
                 err
             ));
         }
@@ -256,12 +287,7 @@ impl Runner {
         fid
     }
 
-    fn new_task(
-        &mut self,
-        files: &mut graph::GraphFiles,
-        bid: BuildId,
-        build: &Build,
-    ) -> Result<Task> {
+    fn new_task(&mut self, files: &mut graph::GraphFiles, build: &Build) -> Result<Task> {
         let store_dir = self.config.store_dir.to_string_lossy().into_owned();
 
         // Provide the task access to all the original files for explicit
@@ -293,7 +319,7 @@ impl Runner {
                     }
 
                     let input = new_opaque_file(
-                        &self.tools.nix,
+                        &self.tools.nix_tool,
                         &self.config.build_dir,
                         file.name.clone().into(),
                     )?;
@@ -354,23 +380,24 @@ impl Runner {
             input_set.insert(input.build_path.clone(), input.clone());
         }
 
-        if let Some(extra_inputs) = self.extra_inputs.get(&bid) {
-            for input in extra_inputs {
-                input_set.insert(input.build_path.clone(), input.clone());
-            }
-        }
-
         let mut inputs: Vec<DerivedFile> = input_set.into_values().collect();
         inputs.sort();
+
+        // Extract store paths from cmdline and add pre-extracted wrapper store paths
+        let mut input_srcs = self.wrapper_store_paths.clone();
+        if let Some(cmdline) = &build.cmdline {
+            let found_store_paths = extract_store_paths(&self.store_regex, cmdline)?;
+            input_srcs.extend(found_store_paths);
+        }
 
         Ok(Task {
             name: format!("ninja-build-{name}"),
             system: self.config.system.clone(),
-            env_vars: self.env_vars.clone(),
+            wrapper_vars: self.wrapper_vars.clone(),
+            input_srcs,
             build_dir: self.config.build_dir.clone(),
             build_deps: build.dependencies.clone(),
             store_dir: self.config.store_dir.clone(),
-            store_regex: self.store_regex.clone(),
             cmdline: build.cmdline.clone(),
             desc: build.desc.clone(),
             deps: build.deps.clone(),
@@ -381,11 +408,11 @@ impl Runner {
     }
 }
 
-fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
+fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
     let cmdline = match &task.cmdline {
         Some(c) => c,
         None => {
-            return process_phony(tools, task);
+            return Err(anyhow!("Phony tasks not yet supported"));
         }
     };
 
@@ -400,35 +427,35 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
         drv.add_arg(&format!("--description={desc}"));
     }
 
-    // Propagate env var from build environment to the task.
-    for (key, value) in &task.env_vars {
-        // TODO: Currently necessary because we're using a gcc wrapped by
-        // nixpkgs that has implicit deps inside env vars like NIX_LDFLAGS,
-        // NIX_CFLAGS_COMPILE. Is there a better way?
-        if !["NIX_LDFLAGS", "NIX_CFLAGS_COMPILE"].contains(&key.as_str())
-            && !key.starts_with("NIX_CC_WRAPPER")
-        {
-            continue;
-        }
+    // Propagate wrapper environment variables to the task.
+    for (key, value) in &task.wrapper_vars {
+        let final_value = if key == "NIX_CFLAGS_COMPILE" {
+            // Also add a deterministic random seed based on the task's
+            // cmdline for reproducible builds.
+            let deterministic_seed = generate_frandom_seed(cmdline);
+            format!("{value} -frandom-seed={deterministic_seed}")
+        } else {
+            value.clone()
+        };
+        drv.set_env(key, &final_value);
+    }
 
-        drv.add_env(key, value);
-        let found_store_paths = extract_store_paths(&task.store_regex, value)?;
-        for store_path in found_store_paths {
-            drv.add_input_src(&store_path.to_string());
-        }
+    // Add pre-extracted store paths from cmdline and wrapper vars
+    for store_path in &task.input_srcs {
+        drv.add_input_src(store_path);
     }
 
     // Needed by all tasks.
-    drv.add_input_src(&tools.cc.to_string())
-        .add_input_src(&tools.coreutils.to_string())
-        .add_input_src(&tools.nix_ninja_task.to_string())
-        .add_input_src(&tools.patchelf.to_string());
+    drv.add_input_src(&tools.cc)
+        .add_input_src(&tools.coreutils)
+        .add_input_src(&tools.nix_ninja_task)
+        .add_input_src(&tools.patchelf);
 
     // Add all ninja build inputs.
     let mut input_set: HashSet<String> = HashSet::new();
     for input in &task.inputs {
         // Declare input for derivation.
-        add_derived_path(&mut drv, input);
+        drv.add_derived_path(&input.derived_path);
 
         // Encode input for nix-ninja-task.
         let encoded = &input.to_encoded();
@@ -440,42 +467,41 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
     let mut discovered_inputs: Vec<DerivedFile> = Vec::new();
     if let Some(deps) = &task.deps {
         if deps == "gcc" {
-            let mut file_set: HashSet<PathBuf> = HashSet::new();
-            // Only explict inputs are processed by gcc.
-            for input in &task.inputs {
-                let source = match input.path {
-                    SingleDerivedPath::Opaque(_) => input.build_path.clone(),
-                    SingleDerivedPath::Built(_) => {
-                        continue;
-                    }
-                };
-                file_set.insert(source);
+            // Only opaque inputs are processed by gcc
+            let files: Vec<PathBuf> = task
+                .inputs
+                .iter()
+                .filter_map(|input| match input.derived_path {
+                    SingleDerivedPath::Opaque(_) => Some(input.build_path.clone()),
+                    SingleDerivedPath::Built(_) => None, // Will be filled in by dynamic task derivation
+                })
+                .collect();
+
+            let (discovered_deps, discovered_store_paths) = discover_c_includes(
+                &tools.nix_tool,
+                &task.store_dir,
+                &task.build_dir,
+                cmdline,
+                files,
+                None,
+            )?;
+
+            // Add discovered store paths as input sources only
+            for store_path in discovered_store_paths {
+                drv.add_input_src(&store_path);
             }
 
-            let files: Vec<PathBuf> = file_set.clone().into_iter().collect();
-            let c_includes = c_include_parser::retrieve_c_includes(cmdline, files)?;
+            // Add discovered deps to NIX_NINJA_INPUTS and derivation
+            for derived_file in discovered_deps {
+                let encoded = derived_file.to_encoded();
 
-            for include in c_includes {
-                if let Ok(relative) = include.strip_prefix(&task.store_dir) {
-                    if let Some(hash_path) = relative.components().next().map(|c| c.as_os_str()) {
-                        let store_path = task.store_dir.join(hash_path);
-                        drv.add_input_src(&store_path.to_string_lossy());
-                        continue;
-                    }
-                }
-
-                let derived_file = new_opaque_file(&tools.nix, &task.build_dir, include)?;
-                // Skip paths that are already in the task inputs.
-                if file_set.contains(&derived_file.build_path) {
+                // Skip if already in input_set
+                if input_set.contains(&encoded) {
                     continue;
                 }
 
-                let encoded = &derived_file.to_encoded();
-                // Should be source-linked.
-                input_set.insert(encoded.clone());
-                // Should be included as an input to derivation.
-                add_derived_path(&mut drv, &derived_file);
-                // Should be returned back to the Runner as a discovered input.
+                input_set.insert(encoded);
+                drv.add_derived_path(&derived_file.derived_path);
                 discovered_inputs.push(derived_file);
             }
         }
@@ -485,7 +511,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
     let mut inputs: Vec<String> = input_set.into_iter().collect();
     inputs.sort();
 
-    drv.add_env("NIX_NINJA_INPUTS", &inputs.join(" "));
+    drv.set_env("NIX_NINJA_INPUTS", &inputs.join(" "));
 
     // Add all ninja build outputs.
     let mut outputs: Vec<String> = Vec::new();
@@ -504,7 +530,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
         );
         outputs.push(encoded);
     }
-    drv.add_env("NIX_NINJA_OUTPUTS", &outputs.join(" "));
+    drv.set_env("NIX_NINJA_OUTPUTS", &outputs.join(" "));
 
     {
         // Prepare $PATH to have coreutils.
@@ -522,41 +548,161 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
         // TODO: If you don't find it it's ok, e.g. ./generated_binary
         let cmdline_path = which_store_path(cmdline_binary)?;
 
-        drv.add_input_src(&cmdline_path.to_string());
+        drv.add_input_src(&cmdline_path);
         path.push(format!("{cmdline_path}/bin"));
-        drv.add_env("PATH", &path.join(":"));
+        drv.set_env("PATH", &path.join(":"));
     }
 
-    // The cmdline may refer to hardcoded store paths as they were found
-    // by the build.ninja generator (e.g. meson). We need to extract them
-    // and add as inputSrcs.
-    let found_store_paths = extract_store_paths(&task.store_regex, cmdline)?;
-    for store_path in found_store_paths {
-        drv.add_input_src(&store_path.to_string());
-    }
-
+    // For debugging purposes:
     // let json = &drv.to_json_pretty()?;
-    // println!("Derivation:\n{}", json);
+    // println!("Derivation:\n{json}");
 
-    // Add the derivation to the Nix store.
-    let drv_path = tools.nix.derivation_add(&drv)?;
-
-    // Collect all the built outputs of the derivation so it can be referenced
-    // as inputs by dependent builds.
-    let mut drv_outputs: Vec<DerivedFile> = Vec::new();
-    for fid in task.outs() {
-        let file = &task.files[fid];
-        let built_file = new_built_file(&drv_path, file.name.clone().into());
-        drv_outputs.push(built_file);
-    }
-
-    // Return both discovered inputs & derivation outputs.
-    discovered_inputs.extend(drv_outputs);
-    Ok(discovered_inputs)
+    Ok(drv)
 }
 
-fn process_phony(_: Tools, _: Task) -> Result<Vec<DerivedFile>> {
-    Err(anyhow!("Unimplemented"))
+// For dynamic tasks, we generate an intermediary derivation that will then
+// generate the final derivation with any discovered dependencies from its
+// dependencies.
+//
+// For example, if a task derivation depends on generated.cc, we also want
+// to depend on any headers generated.cc includes but we don't know that
+// without the derivation that built generated.cc also scanned for includes
+// and wrote that to its $deps output.
+fn build_dynamic_task_derivation(
+    tools: Tools,
+    input_drv: Derivation,
+    built_inputs: Vec<DerivedFile>,
+) -> Result<Derivation> {
+    let mut drv = Derivation::new(
+        &format!("{}.drv", input_drv.name),
+        &input_drv.system,
+        &format!("{}/bin/nix-ninja", tools.nix_ninja),
+    );
+    drv.add_input_src(&tools.nix_ninja)
+        .add_input_src(&tools.nix);
+
+    // Add built inputs as dependencies so the dynamic task has access to them for scanning
+    for built_input in &built_inputs {
+        drv.add_derived_path(&built_input.derived_path);
+    }
+
+    // Encode built inputs for NIX_NINJA_INPUTS so dynamic task can process them
+    let mut inputs: Vec<String> = built_inputs
+        .iter()
+        .map(|input| input.to_encoded())
+        .collect();
+    inputs.sort();
+    drv.set_env("NIX_NINJA_INPUTS", &inputs.join(" "));
+
+    drv.add_ca_output("out", HashAlgorithm::Sha256, OutputHashMode::Text);
+    drv.set_env(
+        "out",
+        &Placeholder::standard_output("out")
+            .render()
+            .to_string_lossy(),
+    );
+
+    // Add the dynamic-task subtool argument
+    drv.add_arg("-t").add_arg("dynamic-task");
+
+    // Propagate sources to dynamic task for it discover inputs.
+    let src = env::var("src").map_err(|_| anyhow!("Expected $src to be set"))?;
+    drv.set_env("src", &src);
+    let src_store_path = StorePath::new(src.clone())?;
+    drv.add_input_src(&src_store_path);
+
+    // Set up PATH to include nix binary
+    let path = format!("{}/bin", tools.nix);
+    drv.set_env("PATH", &path);
+
+    // Requires extra experimental features to add our derivations.
+    drv.set_env(
+        "NIX_CONFIG",
+        "extra-experimental-features = nix-command ca-derivations dynamic-derivations",
+    );
+
+    // Require recursive-nix to allow nix commands inside the build
+    drv.set_env("requiredSystemFeatures", "recursive-nix");
+
+    // Serialize the derivation to a temporary file and add to nix store
+    let drv_json = input_drv.to_json()?;
+    let temp_file = std::env::temp_dir().join(format!("drv-{}.json", input_drv.name));
+    fs::write(&temp_file, &drv_json)?;
+    let drv_json_path = tools.nix_tool.store_add(&temp_file)?;
+
+    // Add derivation.json as input dependency and argument
+    drv.add_input_src(&drv_json_path);
+    drv.add_arg(&drv_json_path.to_string());
+
+    Ok(drv)
+}
+
+/// Handles the result of build_task_derivation, deciding whether to wrap with
+/// a dynamic task derivation or use the derivation directly.
+fn handle_derivation_result(
+    tools: Tools,
+    task: Task,
+    mut drv: Derivation,
+    config: &RunnerConfig,
+    nix_build_lock: Arc<Mutex<()>>,
+) -> Result<SingleDerivedPath> {
+    // Collect built inputs when deps == "gcc" for dynamic dependency discovery
+    let built_inputs: Vec<DerivedFile> = if task.deps.as_ref() == Some(&"gcc".to_string()) {
+        task.inputs
+            .iter()
+            .filter(|input| matches!(input.derived_path, SingleDerivedPath::Built(_)))
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    if !built_inputs.is_empty() {
+        // If we're in Nix sandbox, create a dynamic derivation to handle
+        // dynamic dependencies.
+        if config.is_output_derivation {
+            let dynamic_drv = build_dynamic_task_derivation(tools.clone(), drv, built_inputs)?;
+            let dynamic_drv_path = tools.nix_tool.derivation_add(&dynamic_drv)?;
+            Ok(SingleDerivedPath::Built(SingleDerivedPathBuilt::new(
+                dynamic_drv_path,
+                "out".to_string(),
+            )))
+        } else {
+            // Otherwise, symlink these built_inputs into build_dir and do
+            // dependency discovery locally.
+
+            let built_paths = {
+                // Serialize nix build calls to prevent log output interleaving
+                // when multiple tasks with dynamic dependencies run concurrently
+                //
+                // TODO: This isn't ideal, perhaps we buffer the logs or emit
+                // JSON events for log aggregation.
+                let _lock = nix_build_lock.lock().unwrap();
+                local::build_derived_files(&tools.nix_tool, &built_inputs)?
+            };
+
+            let (discovered_deps, discovered_store_paths) =
+                dynamic_task::discover_dynamic_dependencies(
+                    &tools.nix_tool,
+                    &config.store_dir,
+                    &config.build_dir,
+                    &drv,
+                    built_paths,
+                )?;
+
+            dynamic_task::update_derivation_with_discoveries(
+                &mut drv,
+                discovered_deps,
+                discovered_store_paths,
+            )?;
+
+            let drv_path = tools.nix_tool.derivation_add(&drv)?;
+            Ok(SingleDerivedPath::Opaque(drv_path))
+        }
+    } else {
+        let drv_path = tools.nix_tool.derivation_add(&drv)?;
+        Ok(SingleDerivedPath::Opaque(drv_path))
+    }
 }
 
 pub fn which_store_path(binary_name: &str) -> Result<StorePath> {
@@ -601,35 +747,19 @@ fn new_opaque_file(
     let canonical_path = fs::canonicalize(&path)?;
     let store_path = nix.store_add(&canonical_path)?;
     Ok(DerivedFile {
-        path: SingleDerivedPath::Opaque(store_path.clone()),
+        derived_path: SingleDerivedPath::Opaque(store_path.clone()),
         build_path: relative_path,
         rel_path: None, // None for opaque files - store path points directly to file
     })
 }
 
-fn new_built_file(drv_path: &StorePath, path: PathBuf) -> DerivedFile {
-    let derived_built = SingleDerivedPathBuilt {
-        drv_path: drv_path.clone(),
-        output: normalize_output(&path.to_string_lossy()),
-    };
+fn new_built_file(derived_path: SingleDerivedPath, build_path: PathBuf) -> DerivedFile {
+    let output_name = normalize_output(&build_path.to_string_lossy());
+    let derived_built = SingleDerivedPathBuilt::from_derived_path(derived_path, output_name);
     DerivedFile {
-        path: SingleDerivedPath::Built(derived_built),
-        build_path: path.clone(),
-        rel_path: Some(path), // For built files, rel_path same as build_path
-    }
-}
-
-fn add_derived_path(drv: &mut Derivation, derived_file: &DerivedFile) {
-    match &derived_file.path {
-        SingleDerivedPath::Opaque(store_path) => {
-            drv.add_input_src(&store_path.to_string());
-        }
-        SingleDerivedPath::Built(derived_built) => {
-            drv.add_input_drv(
-                &derived_built.drv_path.to_string(),
-                vec![derived_built.output.clone()],
-            );
-        }
+        derived_path: SingleDerivedPath::Built(derived_built),
+        build_path: build_path.clone(),
+        rel_path: Some(build_path), // For built files, rel_path same as build_path
     }
 }
 
@@ -637,4 +767,63 @@ fn add_derived_path(drv: &mut Derivation, derived_file: &DerivedFile) {
 // store path.
 fn normalize_output(output: &str) -> String {
     output.replace('/', "-")
+}
+
+/// Discovers C include dependencies from a command line and input files.
+/// Returns (discovered_deps, discovered_store_paths) where:
+/// - discovered_deps: DerivedFiles that need to be encoded and added to NIX_NINJA_INPUTS
+/// - discovered_store_paths: Store paths that only need to be added as input sources
+pub fn discover_c_includes(
+    nix_tool: &NixTool,
+    store_dir: &Path,
+    build_dir: &Path,
+    cmdline: &str,
+    files: Vec<PathBuf>,
+    virtual_paths: Option<HashMap<PathBuf, PathBuf>>,
+) -> Result<(Vec<DerivedFile>, Vec<StorePath>)> {
+    let c_includes = c_include_parser::retrieve_c_includes(cmdline, files.clone(), virtual_paths)?;
+    let mut discovered_deps = Vec::new();
+    let mut discovered_store_paths = Vec::new();
+
+    // Convert input files to a set for filtering
+    let input_files: HashSet<PathBuf> = files.into_iter().collect();
+
+    for include in c_includes {
+        // Skip input files - we only want to discover new dependencies
+        if input_files.contains(&include) {
+            continue;
+        }
+
+        // Check if include is from Nix store or a regular file
+        if let Ok(relative) = include.strip_prefix(store_dir) {
+            if let Some(hash_path) = relative.components().next().map(|c| c.as_os_str()) {
+                let store_path = StorePath::new(store_dir.join(hash_path))?;
+                discovered_store_paths.push(store_path);
+                continue;
+            }
+        }
+
+        // Regular file, add to nix store and treat as derived dependency
+        let derived_file = new_opaque_file(nix_tool, build_dir, include)?;
+        discovered_deps.push(derived_file);
+    }
+
+    Ok((discovered_deps, discovered_store_paths))
+}
+
+/// Removes -frandom-seed flag from a string of CFLAGS.
+fn remove_frandom_seed(flags: &str) -> String {
+    flags
+        .split_whitespace()
+        .filter(|flag| !flag.starts_with("-frandom-seed="))
+        .collect::<Vec<&str>>()
+        .join(" ")
+}
+
+/// Generates -frandom-seed based on the task's cmdline.
+fn generate_frandom_seed(cmdline: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(cmdline.as_bytes());
+    let result = hasher.finalize();
+    format!("{result:x}")[..16].to_string()
 }

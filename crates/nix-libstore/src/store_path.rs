@@ -3,7 +3,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 /// A Nix store path
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StorePath {
     /// The full path including the store directory
     path: PathBuf,

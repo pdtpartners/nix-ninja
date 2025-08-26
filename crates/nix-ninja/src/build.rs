@@ -31,8 +31,10 @@ pub fn build(
 
     let tools = task::Tools {
         nix,
+        cc: task::which_store_path("cc")?,
         coreutils: task::which_store_path("coreutils")?,
         nix_ninja_task: task::which_store_path("nix-ninja-task")?,
+        patchelf: task::which_store_path("patchelf")?,
     };
 
     let mut runner = task::Runner::new(

@@ -19,11 +19,15 @@ pub struct Derivation {
     pub args: Vec<String>,
 
     /// Environment variables for the build
-    #[serde(default)]
+    #[serde(default, serialize_with = "serialize_hashmap_sorted")]
     pub env: HashMap<String, String>,
 
     /// Input derivations
-    #[serde(default, rename = "inputDrvs")]
+    #[serde(
+        default,
+        rename = "inputDrvs",
+        serialize_with = "serialize_hashmap_sorted"
+    )]
     pub input_drvs: HashMap<String, InputDrv>,
 
     /// Input sources (store paths)
@@ -35,6 +39,7 @@ pub struct Derivation {
     pub input_srcs: HashSet<String>,
 
     /// Output specifications
+    #[serde(serialize_with = "serialize_hashmap_sorted")]
     pub outputs: HashMap<String, Output>,
 }
 
@@ -45,7 +50,11 @@ pub struct InputDrv {
     pub outputs: Vec<String>,
 
     /// Dynamic outputs for dynamic derivations
-    #[serde(default, rename = "dynamicOutputs")]
+    #[serde(
+        default,
+        rename = "dynamicOutputs",
+        serialize_with = "serialize_hashmap_sorted"
+    )]
     pub dynamic_outputs: HashMap<String, DynamicOutput>,
 }
 
@@ -56,7 +65,11 @@ pub struct DynamicOutput {
     pub outputs: Vec<String>,
 
     /// Nested dynamic outputs
-    #[serde(default, rename = "dynamicOutputs")]
+    #[serde(
+        default,
+        rename = "dynamicOutputs",
+        serialize_with = "serialize_hashmap_sorted"
+    )]
     pub dynamic_outputs: HashMap<String, DynamicOutput>,
 }
 
@@ -223,10 +236,29 @@ impl Derivation {
 fn serialize_hashset_as_vec<S, T>(set: &HashSet<T>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
-    T: Serialize + Clone,
+    T: Serialize + Clone + Ord,
 {
-    let vec: Vec<T> = set.iter().cloned().collect();
+    let mut vec: Vec<T> = set.iter().cloned().collect();
+    vec.sort();
     vec.serialize(serializer)
+}
+
+fn serialize_hashmap_sorted<S, K, V>(map: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+    K: Serialize + Clone + Ord + std::hash::Hash,
+    V: Serialize + Clone,
+{
+    use serde::ser::SerializeMap;
+    let mut sorted_keys: Vec<&K> = map.keys().collect();
+    sorted_keys.sort();
+
+    let mut map_serializer = serializer.serialize_map(Some(map.len()))?;
+    for key in sorted_keys {
+        let value = &map[key];
+        map_serializer.serialize_entry(key, value)?;
+    }
+    map_serializer.end()
 }
 
 #[cfg(test)]

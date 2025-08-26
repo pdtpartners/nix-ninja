@@ -4,6 +4,7 @@
 , nix
 , nix-ninja
 , nix-ninja-task
+, patchelf
 , stdenv
 }:
 
@@ -24,11 +25,12 @@ let
     name = "${name}.drv";
 
     nativeBuildInputs = [
-      meson
       coreutils
+      meson
       nix
       nix-ninja
       nix-ninja-task
+      patchelf
     ] ++ nativeBuildInputs;
 
     requiredSystemFeatures = [ "recursive-nix" ];

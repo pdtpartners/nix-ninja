@@ -1,5 +1,5 @@
 #include "util.h"
 
 const char* msg() {
-  return "dynamic derivations";
+  return "multi-source example";
 }

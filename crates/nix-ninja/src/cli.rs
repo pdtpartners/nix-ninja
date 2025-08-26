@@ -135,10 +135,16 @@ fn nix_build(cli: &Cli, derived_file: &DerivedFile) -> Result<()> {
     let stdout = str::from_utf8(&output.stdout)?;
     let drv_output = StorePath::new(stdout.trim())?;
 
-    if derived_file.source.exists() {
-        fs::remove_file(&derived_file.source)?;
+    let symlink_source = if let Some(rel_path) = &derived_file.rel_path {
+        drv_output.path().join(rel_path)
+    } else {
+        drv_output.path().to_path_buf()
+    };
+
+    if derived_file.build_path.exists() {
+        fs::remove_file(&derived_file.build_path)?;
     }
-    symlink(drv_output.path(), &derived_file.source)?;
+    symlink(symlink_source, &derived_file.build_path)?;
 
     Ok(())
 }

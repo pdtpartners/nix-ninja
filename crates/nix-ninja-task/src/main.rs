@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use clap::command;
 use clap::Parser;
 use nix_ninja_task::derived_file::DerivedFile;
+use nix_ninja_task::patchelf;
 use std::env;
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -38,13 +39,9 @@ pub struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    println!("NIX_BUILD_TOP {}", env::var("NIX_BUILD_TOP")?);
-
-    // Create the build directory
     fs::create_dir_all(&cli.build_dir)?;
     std::env::set_current_dir(&cli.build_dir)?;
 
-    // Parse the inputs into derived files.
     let mut inputs = Vec::new();
     for encoded in cli.inputs.split_whitespace() {
         // println!("Processing input {}", encoded);
@@ -52,7 +49,6 @@ fn main() -> Result<()> {
         inputs.push(input);
     }
 
-    // Parse the outputs into derived files.
     let mut outputs = Vec::new();
     for encoded in cli.outputs.split_whitespace() {
         // println!("Processing output {}", encoded);
@@ -70,21 +66,23 @@ fn main() -> Result<()> {
         cli.build_dir.display()
     );
 
-    // Ensure all output sources have parent directories created.
     create_parent_dirs(&outputs)?;
 
-    // Print out ninja build rule description if available.
     if let Some(desc) = cli.description {
-        println!("nix-ninja-task: {}", &desc);
+        println!("nix-ninja-task: {desc}");
     }
 
     // Spawn cmdline process via sh like ninja upstream does.
-    println!("nix-ninja-task: Running: /bin/sh -c \"{}\"", &cli.cmdline);
+    println!("nix-ninja-task: Running: /bin/sh -c \"{}\"", cli.cmdline);
     let exit_code = spawn_process(cli.cmdline)?;
     if exit_code != 0 {
         println!("nix-ninja-task: Failed with exit code {exit_code}");
         std::process::exit(exit_code);
     }
+
+    // Fix ELF RPATH to ensure it's linked against /nix/store paths rather
+    // than relative path binaries in the build dir.
+    patchelf::fix_rpaths(&cli.store_dir, &outputs)?;
 
     // Outputs must be created in build directory and then copied out because
     // ninja build rules can have implicit outputs that we have no way of
@@ -95,7 +93,11 @@ fn main() -> Result<()> {
         outputs.len(),
     );
     for output in &outputs {
-        fs::copy(&output.source, output.to_string())?;
+        let target_path = PathBuf::from(&output.to_string());
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&output.build_path, &target_path)?;
     }
 
     Ok(())
@@ -103,22 +105,24 @@ fn main() -> Result<()> {
 
 /// Creates symlinks for derived files under the specified prefix.
 ///
-/// For each derived file, creates a symlink at `prefix/${derived_file.source}`
+/// For each derived file, creates a symlink at `prefix/${derived_file.build_path}`
 /// pointing to the actual file at `derived_file.path`.
 fn create_symlinks(prefix: &std::path::Path, inputs: Vec<DerivedFile>) -> Result<()> {
     for input in inputs {
-        // Get the source path (where the symlink points to)
         let source_path = input.to_string();
-
-        // Get the destination path (where the symlink is created)
-        let dest_path = prefix.join(&input.source);
+        let dest_path = prefix.join(&input.build_path);
 
         // Create parent directories if they don't exist
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        // Create the symlink directly
+        if !std::path::Path::new(&source_path).exists() {
+            return Err(anyhow!(
+                "nix-ninja-task: symlink source does not exist: {source_path}"
+            ));
+        }
+
         symlink(&source_path, &dest_path).map_err(|e| {
             anyhow!(
                 "Failed to create symlink from {} to {}: {}",
@@ -135,7 +139,7 @@ fn create_symlinks(prefix: &std::path::Path, inputs: Vec<DerivedFile>) -> Result
 fn create_parent_dirs(outputs: &Vec<DerivedFile>) -> Result<()> {
     let mut dirs: Vec<&std::path::Path> = Vec::new();
     for output in outputs {
-        if let Some(parent) = output.source.parent() {
+        if let Some(parent) = output.build_path.parent() {
             if dirs.contains(&parent) {
                 continue;
             }
@@ -153,9 +157,6 @@ fn spawn_process(cmdline: String) -> Result<i32> {
         .stderr(Stdio::inherit())
         .envs(env::vars());
 
-    // Spawn and wait for the process
     let output = cmd.status()?;
-
-    // Return the exit code
     Ok(output.code().unwrap_or(1))
 }

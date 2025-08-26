@@ -8,13 +8,20 @@
         nix-ninja-llvm-coverage
       ;
 
-      default = pkgs.nix-ninja;
+      default = pkgs.buildEnv {
+        name = "nix-ninja";
+        paths = with pkgs; [
+          nix-ninja
+          nix-ninja-task
+        ];
+      };
     };
 
     legacyPackages = {
       example-hello = pkgs.example-hello.target;
       example-header = pkgs.example-header.target;
-      example-incremental = pkgs.example-incremental.target;
+      example-multi-source = pkgs.example-multi-source.target;
+      example-shared-lib = pkgs.example-shared-lib.target;
       example-nix = pkgs.example-nix.target;
     };
 

@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
+use nix_libstore::derived_path::SingleDerivedPath;
 use nix_libstore::store_path::StorePath;
-use nix_libstore::{derived_path::SingleDerivedPath, prelude::Placeholder};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -67,21 +67,5 @@ impl fmt::Display for DerivedFile {
         } else {
             write!(f, "{}", base_path.to_string_lossy())
         }
-    }
-}
-
-pub struct DerivedOutput {
-    pub placeholder: Placeholder,
-    pub build_path: PathBuf, // Where file appears in build dir
-}
-
-impl DerivedOutput {
-    pub fn to_encoded(&self) -> String {
-        format!(
-            "{}:{}:{}",
-            &self.placeholder.render().display(),
-            &self.build_path.display(),
-            &self.build_path.display()
-        )
     }
 }

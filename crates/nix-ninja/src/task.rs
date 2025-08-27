@@ -6,7 +6,7 @@ use n2::{
     graph::{self, Build, BuildDependencies, BuildId, File, FileId},
 };
 use nix_libstore::prelude::*;
-use nix_ninja_task::derived_file::{DerivedFile, DerivedOutput};
+use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::NixTool;
 use regex::Regex;
 use std::{
@@ -48,7 +48,7 @@ struct Task {
 
     files: HashMap<FileId, File>,
     inputs: Vec<DerivedFile>,
-    outputs: Vec<DerivedOutput>,
+    outputs: Vec<PathBuf>,
 }
 
 impl Deref for Task {
@@ -310,16 +310,10 @@ impl Runner {
         let primary_file = &files.by_id[*primary_fid];
         let name = normalize_output(&primary_file.name);
 
-        let mut outputs: Vec<DerivedOutput> = Vec::new();
+        let mut outputs: Vec<PathBuf> = Vec::new();
         for fid in build.outs() {
             let file = &files.by_id[*fid];
-            let normalized_name = normalize_output(&file.name);
-            let placeholder = Placeholder::standard_output(&normalized_name);
-            let output = DerivedOutput {
-                placeholder,
-                build_path: PathBuf::from(&file.name),
-            };
-            outputs.push(output);
+            outputs.push(PathBuf::from(&file.name));
         }
 
         // TODO: Can we avoid this? Technically the build rule isn't complete.
@@ -495,14 +489,20 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Vec<DerivedFile>> {
 
     // Add all ninja build outputs.
     let mut outputs: Vec<String> = Vec::new();
-    for output in &task.outputs {
+    for output_path in &task.outputs {
         // Declare a content addressed output.
-        let normalized_name = normalize_output(&output.build_path.to_string_lossy());
+        let normalized_name = normalize_output(&output_path.to_string_lossy());
         drv.add_ca_output(&normalized_name, HashAlgorithm::Sha256, OutputHashMode::Nar);
 
-        // Encode output for nix-ninja-task.
-        let encoded = &output.to_encoded();
-        outputs.push(encoded.clone());
+        // Create a placeholder and encode output for nix-ninja-task.
+        let placeholder = Placeholder::standard_output(&normalized_name);
+        let encoded = format!(
+            "{}:{}:{}",
+            &placeholder.render().display(),
+            &output_path.display(),
+            &output_path.display()
+        );
+        outputs.push(encoded);
     }
     drv.add_env("NIX_NINJA_OUTPUTS", &outputs.join(" "));
 

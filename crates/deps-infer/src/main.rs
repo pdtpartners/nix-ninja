@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
-use deps_infer::{c_include_parser, gcc_depfile};
+use deps_infer::{c_include_parser, clang_infer, gcc_depfile};
 use n2::{canon, load, scanner};
 use std::{
     path::{Path, PathBuf},
@@ -64,14 +64,28 @@ fn main() -> Result<()> {
 
     match args.mode {
         Mode::Scan => {
-            let target_name = args.target.unwrap();
-
-            for target in targets {
-                if target.filename == target_name {
-                    return run_scan_mode(target);
+            match args.target {
+                Some(target_name) => {
+                    for target in targets {
+                        if target.filename == target_name {
+                            return run_scan_mode(target);
+                        }
+                    }
+                    Err(anyhow!("Failed to find target: {}", target_name))
+                }
+                None => {
+                    // Process all targets when no specific target is given
+                    for target in targets {
+                        let filename = target.filename.clone();
+                        println!("=== Scanning target: {} ===", filename);
+                        if let Err(e) = run_scan_mode(target) {
+                            eprintln!("Error scanning {}: {}", filename, e);
+                        }
+                        println!();
+                    }
+                    Ok(())
                 }
             }
-            Err(anyhow!("Failed to find target: {}", target_name))
         }
         Mode::Benchmark => run_benchmark_mode(targets),
         Mode::Correctness => run_correctness_mode(targets),
@@ -140,19 +154,16 @@ fn load_targets(build_filename: &str) -> Result<Vec<Target>> {
 }
 
 fn run_scan_mode(target: Target) -> Result<()> {
-    let gcc_includes = gcc_depfile::retrieve_c_includes(&target.cmdline)?;
-    println!("GCC depfile method:");
-    for include in gcc_includes {
+    let c_include_includes = c_include_parser::retrieve_c_includes(&target.cmdline, vec![target.filename.clone().into()])?;
+    println!("c_include_parser method:");
+    for include in c_include_includes {
         println!("{}", include.display());
     }
 
-    // Benchmark c_include_parser method
-    let c_includes = c_include_parser::retrieve_c_includes(
-        &target.cmdline,
-        vec![target.filename.clone().into()],
-    )?;
-    println!("C include parser method:");
-    for include in c_includes {
+    let clang_includes =
+        clang_infer::retrieve_c_includes(&target.cmdline, vec![target.filename.clone().into()])?;
+    println!("clang_infer method:");
+    for include in clang_includes {
         println!("{}", include.display());
     }
 
@@ -160,42 +171,43 @@ fn run_scan_mode(target: Target) -> Result<()> {
 }
 
 fn run_benchmark_mode(targets: Vec<Target>) -> Result<()> {
-    // Benchmark gcc_depfile method
-    let gcc_start = Instant::now();
-    for target in &targets {
-        gcc_depfile::retrieve_c_includes(&target.cmdline)?;
-    }
-    let gcc_duration = gcc_start.elapsed();
-    println!(
-        "GCC depfile method: {} milliseconds",
-        gcc_duration.as_millis()
-    );
-
+    println!("Benchmarking {} targets...", targets.len());
+    
     // Benchmark c_include_parser method
-    let c_start = Instant::now();
+    let c_include_start = Instant::now();
     for target in &targets {
-        c_include_parser::retrieve_c_includes(
-            &target.cmdline,
-            vec![target.filename.clone().into()],
-        )?;
+        let _ = c_include_parser::retrieve_c_includes(&target.cmdline, vec![target.filename.clone().into()]);
     }
-    let c_duration = c_start.elapsed();
+    let c_include_duration = c_include_start.elapsed();
     println!(
-        "C include parser method: {} milliseconds",
-        c_duration.as_millis()
+        "c_include_parser method: {} milliseconds",
+        c_include_duration.as_millis()
     );
 
-    // Calculate and display percentage difference
-    let gcc_ms = gcc_duration.as_millis() as f64;
-    let c_ms = c_duration.as_millis() as f64;
+    // Benchmark clang_infer method
+    let clang_start = Instant::now();
+    for target in &targets {
+        let _ = clang_infer::retrieve_c_includes(&target.cmdline, vec![target.filename.clone().into()]);
+    }
+    let clang_duration = clang_start.elapsed();
+    println!(
+        "clang_infer method: {} milliseconds",
+        clang_duration.as_millis()
+    );
 
-    if gcc_ms > 0.0 && c_ms > 0.0 {
-        let percentage_diff = (gcc_ms / c_ms) * 100.0;
-        if percentage_diff > 0.0 {
-            println!("C include parser is {percentage_diff:.2}% faster than GCC depfile method");
+    // Calculate and display performance comparison
+    let c_include_ms = c_include_duration.as_millis() as f64;
+    let clang_ms = clang_duration.as_millis() as f64;
+
+    if c_include_ms > 0.0 && clang_ms > 0.0 {
+        let ratio = c_include_ms / clang_ms;
+        if ratio > 1.0 {
+            println!("clang_infer is {:.2}x faster than c_include_parser", ratio);
         } else {
-            println!("C include parser is {percentage_diff:.2}% slower than GCC depfile method");
+            println!("c_include_parser is {:.2}x faster than clang_infer", 1.0 / ratio);
         }
+        
+        println!("Performance ratio (c_include_parser / clang_infer): {:.2}", ratio);
     }
 
     Ok(())
@@ -204,46 +216,46 @@ fn run_benchmark_mode(targets: Vec<Target>) -> Result<()> {
 fn run_correctness_mode(targets: Vec<Target>) -> Result<()> {
     let current_dir = std::env::current_dir()?;
     for target in targets {
-        let mut c_includes = c_include_parser::retrieve_c_includes(
+        let mut clang_includes = clang_infer::retrieve_c_includes(
             &target.cmdline,
             vec![target.filename.clone().into()],
         )?;
-        c_includes = normalize_paths(c_includes, &current_dir);
+        clang_includes = normalize_paths(clang_includes, &current_dir);
 
         let mut gcc_includes = gcc_depfile::retrieve_c_includes(&target.cmdline)?;
         gcc_includes = normalize_paths(gcc_includes, &current_dir);
 
         println!(
-            "{}: c {}, gcc {}",
+            "{}: clang {}, gcc {}",
             target.filename,
-            c_includes.len(),
+            clang_includes.len(),
             gcc_includes.len()
         );
 
-        // Find items in gcc_includes but not in c_includes
+        // Find items in gcc_includes but not in clang_includes
         let gcc_only: Vec<_> = gcc_includes
             .iter()
-            .filter(|path| !c_includes.contains(path))
+            .filter(|path| !clang_includes.contains(path))
             .collect();
 
         if !gcc_only.is_empty() {
             println!("Mismatch for {}", target.filename);
 
-            // Find items in c_includes but not in gcc_includes
-            let c_only: Vec<_> = c_includes
+            // Find items in clang_includes but not in gcc_includes
+            let clang_only: Vec<_> = clang_includes
                 .iter()
                 .filter(|path| !gcc_includes.contains(path))
                 .collect();
 
-            if !c_only.is_empty() {
-                println!("Found in c_includes but missing from gcc_includes:");
-                for path in c_only {
+            if !clang_only.is_empty() {
+                println!("Found in clang_includes but missing from gcc_includes:");
+                for path in clang_only {
                     println!("  + {}", path.display());
                 }
             }
 
             if !gcc_only.is_empty() {
-                println!("Found in gcc_includes but missing from c_includes:");
+                println!("Found in gcc_includes but missing from clang_includes:");
                 for path in gcc_only {
                     println!("  - {}", path.display());
                 }
@@ -253,10 +265,7 @@ fn run_correctness_mode(targets: Vec<Target>) -> Result<()> {
         }
     }
 
-    println!(
-        "c_include_parser is fully correct for {}",
-        current_dir.display()
-    );
+    println!("clang_infer is fully correct for {}", current_dir.display());
 
     Ok(())
 }

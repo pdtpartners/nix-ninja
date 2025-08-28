@@ -35,6 +35,12 @@
         meson
         taplo
       ];
+
+      buildInputs = with pkgs; [
+        libclang.lib
+      ];
+
+      LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
     };
   };
 }

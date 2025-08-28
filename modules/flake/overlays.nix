@@ -21,6 +21,10 @@
         nativeBuildInputs = [
           self.pkg-config
         ];
+        buildInputs = [
+          self.libclang.lib
+        ];
+        LIBCLANG_PATH = "${self.libclang.lib}/lib";
       };
 
       # Build *just* the cargo dependencies, so we can reuse

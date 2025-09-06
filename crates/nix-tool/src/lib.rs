@@ -5,6 +5,7 @@ use nix_libstore::store_path::StorePath;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::process::{Command, Output};
+use std::str;
 
 /// Configuration for Nix store operations
 #[derive(Debug, Clone)]
@@ -35,11 +36,12 @@ impl NixTool {
         NixTool { config }
     }
 
-    pub fn build(&self, derived_path: &SingleDerivedPath) -> Result<Output> {
-        let installable = &derived_path.to_string();
+    pub fn build(&self, derived_paths: &[SingleDerivedPath]) -> Result<Vec<StorePath>> {
+        let installables: Vec<String> = derived_paths.iter().map(|p| p.to_string()).collect();
         let output = Command::new(&self.config.nix_tool)
             .args(&self.config.extra_args)
-            .args(["build", "-L", "--no-link", "--print-out-paths", installable])
+            .args(["build", "-L", "--no-link", "--print-out-paths"])
+            .args(&installables)
             .stderr(std::process::Stdio::inherit())
             .output()?;
 
@@ -48,7 +50,13 @@ impl NixTool {
             return Err(anyhow!("Failed to build:\n{}", stderr));
         }
 
-        Ok(output)
+        let stdout = str::from_utf8(&output.stdout)?;
+        let store_paths: Vec<StorePath> = stdout
+            .lines()
+            .map(|line| StorePath::new(line.trim()))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(store_paths)
     }
 
     /// Add a file to the Nix store

@@ -12,14 +12,11 @@
 , src
 , target
 , nativeBuildInputs ? [ ]
-, nixNinjaExtraInputs ? [ ]
 , ...
 }@args':
 
 let
   normalizedTarget = builtins.replaceStrings ["/"] ["-"] target;
-
-  extraInputs = builtins.concatStringsSep "," nixNinjaExtraInputs;
 
   ninjaDrv = stdenv.mkDerivation (args' // {
     name = "${name}.drv";
@@ -39,9 +36,7 @@ let
       export NIX_NINJA_DRV="true"
       export NINJA="${nix-ninja}/bin/nix-ninja"
       export NIX_CONFIG="extra-experimental-features = nix-command ca-derivations dynamic-derivations"
-    '' + (lib.optionalString (builtins.length nixNinjaExtraInputs > 0) ''
-      export NIX_NINJA_EXTRA_INPUTS="${extraInputs}"
-    '');
+    '';
 
     buildPhase = ''
       runHook preBuild

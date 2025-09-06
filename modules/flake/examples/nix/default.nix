@@ -37,14 +37,6 @@ mkMesonPackage {
   inherit src;
   target = "src/nix/nix";
 
-  nixNinjaExtraInputs = [
-    "src/libexpr/libnixexpr.so.p/meson-generated_.._parser-tab.cc.o:../src/libexpr/parser.y"
-    "src/libexpr/libnixexpr.so.p/meson-generated_.._lexer-tab.cc.o:../src/libexpr/parser.y"
-    "src/libexpr/libnixexpr.so.p/meson-generated_.._lexer-tab.cc.o:../src/libexpr/lexer.l"
-    "src/libexpr/libnixexpr.so.p/eval.cc.o:../src/libexpr/parser.y"
-    "src/libexpr/libnixexpr.so.p/lexer-helpers.cc.o:../src/libexpr/parser.y"
-  ];
-
   nativeBuildInputs = [
     aws-sdk-cpp
     bison

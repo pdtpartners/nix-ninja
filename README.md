@@ -34,8 +34,8 @@ system that outputs ninja like CMake, meson, premake, gn, etc.
 
 ## Getting started
 
-First you need to use [nix@d904921] and enable the following experimental
-features:
+First you need to use Nix 2.30 or later (newer than stable) and enable the
+following experimental features:
 
 ```sh
 experimental-features = ["nix-command" "dynamic-derivations" "ca-derivations" "recursive-nix"]
@@ -99,4 +99,3 @@ The source code developed for nix-ninja is licensed under MIT License.
 [dynamic-derivations]: docs/dynamic-derivations.md
 [milestones]: https://github.com/pdtpartners/nix-ninja/milestones
 [ninja-build]: https://ninja-build.org/
-[nix@d904921]: https://github.com/NixOS/nix/commit/d904921eecbc17662fef67e8162bd3c7d1a54ce0

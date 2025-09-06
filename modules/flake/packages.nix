@@ -22,6 +22,7 @@
       example-header = pkgs.example-header.target;
       example-multi-source = pkgs.example-multi-source.target;
       example-shared-lib = pkgs.example-shared-lib.target;
+      example-dynamic-deps = pkgs.example-dynamic-deps.target;
       example-nix = pkgs.example-nix.target;
     };
 

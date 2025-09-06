@@ -17,6 +17,7 @@ nix-tool = { path = "../nix-tool" }
 regex = "1"
 serde = "1"
 serde_json = "1"
+sha2 = "0.10"
 shell-words = "1.1.0"
 walkdir = "2"
 which = "7.0.2"

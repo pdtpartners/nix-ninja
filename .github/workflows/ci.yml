@@ -49,6 +49,7 @@ jobs:
           - nix-build-header
           - nix-build-multi-source
           - nix-build-shared-lib
+          - nix-build-dynamic-deps
     steps:
       - uses: actions/checkout@v4
       - name: Setup Nix

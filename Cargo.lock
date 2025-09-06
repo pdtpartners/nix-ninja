@@ -368,8 +368,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "include-graph",
  "n2",
+ "regex",
  "shell-words",
  "tracing",
  "tracing-subscriber",
@@ -734,6 +734,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "shell-words",
  "walkdir",
  "which",

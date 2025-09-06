@@ -75,6 +75,8 @@
             "Cargo.{toml,lock}"
             "crates/nix-{libstore,ninja-task}/Cargo.toml"
             "crates/nix-{libstore,ninja-task}/**/*.rs"
+            "crates/deps-infer/Cargo.toml"
+            "crates/deps-infer/**/*.rs"
           ];
         };
       });
@@ -89,6 +91,7 @@
         name = "example-header";
         src = ./examples/header;
         target = "hello";
+        nativeBuildInputs = [ self.nlohmann_json ];
       };
 
       example-multi-source = self.mkMesonPackage {
@@ -101,6 +104,13 @@
         name = "example-shared-lib";
         src = ./examples/shared-lib;
         target = "main";
+      };
+
+      example-dynamic-deps= self.mkMesonPackage {
+        name = "example-dynamic-deps";
+        src = ./examples/dynamic-deps;
+        target = "main";
+        nativeBuildInputs = [ self.nlohmann_json self.pkg-config ];
       };
 
       example-nix = self.callPackage ./examples/nix { src = inputs.nix; };

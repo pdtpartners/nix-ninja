@@ -57,8 +57,9 @@ in {
       git
       nix-ninja
       nix-ninja-task
-      nixVersions.nix_2_30
     ];
+
+    nix.package = self.inputs.nix.packages.${pkgs.stdenv.hostPlatform.system}.nix;
 
     nix.extraOptions = ''
       experimental-features = nix-command flakes dynamic-derivations ca-derivations recursive-nix

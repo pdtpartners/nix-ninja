@@ -12,6 +12,7 @@
 , editline
 , flex
 , gtest
+, jsonschema
 , lib
 , libarchive
 , libblake3
@@ -50,6 +51,7 @@ mkMesonPackage {
     doxygen
     editline
     flex
+    jsonschema
     libarchive
     libblake3
     libcpuid

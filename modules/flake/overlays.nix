@@ -44,6 +44,7 @@
 
       mkMesonPackage = self.callPackage ./pkgs/mkMesonPackage {
         inherit (self) nix-ninja nix-ninja-task;
+        nix = inputs.nix.packages.${self.system}.nix;
       };
 
       # meson --internal symbolextractor depends on readelf.

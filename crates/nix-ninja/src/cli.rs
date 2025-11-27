@@ -3,6 +3,7 @@ use crate::local;
 use crate::subtool::dynamic_task;
 use anyhow::{anyhow, Result};
 use clap::Parser;
+use harmonia_store_core::store_path::StoreDir;
 use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::{NixTool, StoreConfig};
 use std::{
@@ -48,7 +49,7 @@ pub struct Cli {
 
     /// Specify the Nix store directory
     #[arg(long = "store-dir", default_value = "/nix/store", env = "NIX_STORE")]
-    pub store_dir: PathBuf,
+    pub store_dir: StoreDir,
 
     /// Specify the Nix tool
     #[arg(long = "nix-tool", default_value = "nix", env = "NIX_TOOL")]
@@ -87,7 +88,7 @@ pub fn run() -> Result<i32> {
         return subtool(
             nix_tool,
             &build_dir,
-            cli.store_dir.as_path(),
+            &cli.store_dir,
             &tool,
             cli.targets.clone(),
         );
@@ -97,9 +98,20 @@ pub fn run() -> Result<i32> {
         Ok(derived_file) => {
             if cli.is_output_derivation {
                 let out = env::var("out").map_err(|_| anyhow!("Expected $out to be set"))?;
-                fs::copy(derived_file.derived_path.store_path().path(), out)?;
+                fs::copy(
+                    derived_file
+                        .derived_path
+                        .root_path()
+                        .to_absolute_path(&cli.store_dir),
+                    out,
+                )?;
             } else {
-                local::symlink_derived_files(&nix_tool, &build_dir, &[derived_file])?;
+                local::symlink_derived_files(
+                    &nix_tool,
+                    &cli.store_dir,
+                    &build_dir,
+                    &[derived_file],
+                )?;
             }
             Ok(0)
         }
@@ -128,7 +140,7 @@ fn build(cli: &Cli, build_dir: &Path) -> Result<DerivedFile> {
 fn subtool(
     nix_tool: NixTool,
     build_dir: &Path,
-    store_dir: &Path,
+    store_dir: &StoreDir,
     subtool_name: &str,
     targets: Vec<String>,
 ) -> Result<i32> {
@@ -141,7 +153,8 @@ fn subtool(
         "drv" => {
             let cli = Cli::parse();
             let derived_file = build(&cli, build_dir)?;
-            let output = nix_tool.derivation_show(&derived_file.derived_path.store_path())?;
+            let output =
+                nix_tool.derivation_show(store_dir, derived_file.derived_path.root_path())?;
             let stdout = str::from_utf8(&output.stdout)?;
             println!("{stdout}");
         }
@@ -163,7 +176,7 @@ fn subtool(
     Ok(0)
 }
 
-fn dynamic_task_subtool(nix_tool: NixTool, store_dir: &Path, targets: Vec<String>) -> i32 {
+fn dynamic_task_subtool(nix_tool: NixTool, store_dir: &StoreDir, targets: Vec<String>) -> i32 {
     match dynamic_task::run(nix_tool, store_dir, targets) {
         Ok(code) => code,
         Err(err) => {

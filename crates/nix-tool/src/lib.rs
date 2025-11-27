@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Context, Result};
-use nix_libstore::derivation::Derivation;
-use nix_libstore::derived_path::SingleDerivedPath;
-use nix_libstore::store_path::StorePath;
+use harmonia_store_core::derivation::Derivation;
+use harmonia_store_core::derived_path::SingleDerivedPath;
+use harmonia_store_core::store_path::StoreDir;
+use harmonia_store_core::store_path::StorePath;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::process::{Command, Output};
@@ -36,8 +37,15 @@ impl NixTool {
         NixTool { config }
     }
 
-    pub fn build(&self, derived_paths: &[SingleDerivedPath]) -> Result<Vec<StorePath>> {
-        let installables: Vec<String> = derived_paths.iter().map(|p| p.to_string()).collect();
+    pub fn build(
+        &self,
+        store_dir: &StoreDir,
+        derived_paths: &[SingleDerivedPath],
+    ) -> Result<Vec<StorePath>> {
+        let installables: Vec<String> = derived_paths
+            .iter()
+            .map(|p| store_dir.display(p).to_string())
+            .collect();
         let output = Command::new(&self.config.nix_tool)
             .args(&self.config.extra_args)
             .args(["build", "-L", "--no-link", "--print-out-paths"])
@@ -53,14 +61,14 @@ impl NixTool {
         let stdout = str::from_utf8(&output.stdout)?;
         let store_paths: Vec<StorePath> = stdout
             .lines()
-            .map(|line| StorePath::new(line.trim()))
+            .map(|line| store_dir.parse(line.trim()))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(store_paths)
     }
 
     /// Add a file to the Nix store
-    pub fn store_add(&self, path: &std::path::Path) -> Result<StorePath> {
+    pub fn store_add(&self, store_dir: &StoreDir, path: &std::path::Path) -> Result<StorePath> {
         let output = self
             .run_nix_command(&["store", "add", &path.to_string_lossy()])
             .map_err(|err| anyhow!("Failed to store add {}: {}", &path.to_string_lossy(), err))?;
@@ -70,24 +78,21 @@ impl NixTool {
             .trim()
             .to_string();
 
-        StorePath::new(store_path_str).context("Failed to parse store path")
+        store_dir
+            .parse(&store_path_str)
+            .context("Failed to parse store path")
     }
 
-    pub fn derivation_show(&self, drv_path: &StorePath) -> Result<Output> {
-        self.run_nix_command(&["derivation", "show", &drv_path.to_string()])
-            .map_err(|err| {
-                anyhow!(
-                    "Failed to derivation show {}: {}",
-                    &drv_path.to_string(),
-                    err
-                )
-            })
+    pub fn derivation_show(&self, store_dir: &StoreDir, drv_path: &StorePath) -> Result<Output> {
+        let full_path = store_dir.display(drv_path).to_string();
+        self.run_nix_command(&["derivation", "show", &full_path])
+            .map_err(|err| anyhow!("Failed to derivation show {}: {}", &full_path, err))
     }
 
     /// Add a derivation to the Nix store
-    pub fn derivation_add(&self, drv: &Derivation) -> Result<StorePath> {
+    pub fn derivation_add(&self, store_dir: &StoreDir, drv: &Derivation) -> Result<StorePath> {
         // Serialize the drv to JSON
-        let json = drv.to_json()?;
+        let json = serde_json::to_string(drv)?;
 
         // Create a command with piped stdin/stdout/stderr
         let mut command = Command::new(&self.config.nix_tool);
@@ -120,7 +125,9 @@ impl NixTool {
             .trim()
             .to_string();
 
-        StorePath::new(store_path_str).context("Failed to parse store path")
+        store_dir
+            .parse(&store_path_str)
+            .context("Failed to parse store path")
     }
 
     /// Run a Nix command and return its output

@@ -1,5 +1,6 @@
 use anyhow::Result;
-use nix_libstore::prelude::SingleDerivedPath;
+use harmonia_store_core::derived_path::SingleDerivedPath;
+use harmonia_store_core::store_path::StoreDir;
 use nix_ninja_task::derived_file::{create_symlinks, DerivedFile};
 use nix_tool::NixTool;
 use std::collections::HashMap;
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 pub fn build_derived_files(
     nix_tool: &NixTool,
+    store_dir: &StoreDir,
     derived_files: &[DerivedFile],
 ) -> Result<HashMap<PathBuf, PathBuf>> {
     let derived_paths: Vec<_> = derived_files
@@ -15,7 +17,7 @@ pub fn build_derived_files(
         .collect();
 
     // Build derived paths so the Nix store paths exist on the host.
-    let store_paths = nix_tool.build(&derived_paths)?;
+    let store_paths = nix_tool.build(store_dir, &derived_paths)?;
 
     // Create mapping from build_path to actual store path
     let built_paths: HashMap<PathBuf, PathBuf> = derived_files
@@ -23,9 +25,9 @@ pub fn build_derived_files(
         .zip(store_paths.iter())
         .map(|(df, store_path)| {
             let actual_path = if let Some(rel_path) = &df.rel_path {
-                store_path.path().join(rel_path)
+                store_path.to_absolute_path(store_dir).join(rel_path)
             } else {
-                store_path.path().to_path_buf()
+                store_path.to_absolute_path(store_dir)
             };
             (df.build_path.clone(), actual_path)
         })
@@ -36,6 +38,7 @@ pub fn build_derived_files(
 
 pub fn symlink_derived_files(
     nix_tool: &NixTool,
+    store_dir: &StoreDir,
     prefix: &Path,
     derived_files: &[DerivedFile],
 ) -> Result<()> {
@@ -43,7 +46,7 @@ pub fn symlink_derived_files(
         .iter()
         .map(|df| df.derived_path.clone())
         .collect();
-    let store_paths = nix_tool.build(&derived_paths)?;
+    let store_paths = nix_tool.build(store_dir, &derived_paths)?;
 
     // Create new DerivedFiles with opaque store paths instead of placeholders
     let opaque_files: Vec<DerivedFile> = derived_files
@@ -56,7 +59,7 @@ pub fn symlink_derived_files(
         })
         .collect();
 
-    create_symlinks(prefix, opaque_files, true)?;
+    create_symlinks(prefix, store_dir, opaque_files, true)?;
 
     Ok(())
 }

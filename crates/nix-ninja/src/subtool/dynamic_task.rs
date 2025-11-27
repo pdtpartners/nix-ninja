@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Result};
-use nix_libstore::prelude::{Derivation, StorePath};
+use harmonia_store_core::derivation::Derivation;
+use harmonia_store_core::derived_path::SingleDerivedPath;
+use harmonia_store_core::store_path::{StoreDir, StorePath};
 use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::NixTool;
 use std::{
@@ -10,41 +12,45 @@ use std::{
 
 use crate::task::discover_c_includes;
 
-pub fn run(nix_tool: NixTool, store_dir: &Path, targets: Vec<String>) -> Result<i32> {
+pub fn run(nix_tool: NixTool, store_dir: &StoreDir, targets: Vec<String>) -> Result<i32> {
     let input_drv = targets
         .first()
         .ok_or_else(|| anyhow!("Expected derivation path as argument"))?;
 
     let drv_json = fs::read_to_string(input_drv)?;
-    let mut drv = Derivation::from_json(&drv_json)?;
+    let mut drv: Derivation = serde_json::from_str(&drv_json)?;
     println!("nix-ninja-dynamic-task: Processing derivation {}", drv.name);
 
     // Stage 1: Prepare build environment
-    let (build_dir, built_paths) = prepare_build_environment()?;
+    let (build_dir, built_paths) = prepare_build_environment(store_dir)?;
 
     // Stage 2: Discover dynamic dependencies
     let (discovered_deps, discovered_store_paths) =
         discover_dynamic_dependencies(&nix_tool, store_dir, &build_dir, &drv, built_paths)?;
 
     // Stage 3: Update derivation with discovered dependencies
-    let new_deps =
-        update_derivation_with_discoveries(&mut drv, discovered_deps, discovered_store_paths)?;
+    let new_deps = update_derivation_with_discoveries(
+        &mut drv,
+        discovered_deps,
+        discovered_store_paths,
+        store_dir,
+    )?;
 
     // Print discovery results
     if !new_deps.is_empty() {
         for dep in &new_deps {
             println!(
                 "nix-ninja-dynamic-task: Discovered dependency: {}",
-                dep.derived_path.store_path()
+                dep.derived_path.root_path()
             );
         }
     } else {
         println!("nix-ninja-dynamic-task: No new dependencies discovered");
     }
 
-    let drv_path = nix_tool.derivation_add(&drv)?;
+    let drv_path = nix_tool.derivation_add(store_dir, &drv)?;
     let out = env::var("out").map_err(|_| anyhow!("Expected $out to be set"))?;
-    fs::copy(drv_path.path(), out)?;
+    fs::copy(drv_path.to_absolute_path(store_dir), out)?;
 
     println!("nix-ninja-dynamic-task: Added derivation to store: {drv_path}");
     Ok(0)
@@ -52,7 +58,7 @@ pub fn run(nix_tool: NixTool, store_dir: &Path, targets: Vec<String>) -> Result<
 
 /// Stage 1: Prepare build environment by setting up directories, copying source,
 /// and building derived files
-fn prepare_build_environment() -> Result<(PathBuf, HashMap<PathBuf, PathBuf>)> {
+fn prepare_build_environment(store_dir: &StoreDir) -> Result<(PathBuf, HashMap<PathBuf, PathBuf>)> {
     // Set up build directory using NIX_BUILD_TOP
     let build_top =
         env::var("NIX_BUILD_TOP").map_err(|_| anyhow!("Expected $NIX_BUILD_TOP to be set"))?;
@@ -74,14 +80,14 @@ fn prepare_build_environment() -> Result<(PathBuf, HashMap<PathBuf, PathBuf>)> {
     // Get built inputs for dynamic dependency discovery
     let derived_files: Vec<DerivedFile> = inputs
         .split_whitespace()
-        .filter_map(|encoded| DerivedFile::from_encoded(encoded).ok())
+        .filter_map(|encoded| DerivedFile::from_encoded(store_dir, encoded).ok())
         .collect();
 
     // In derivation mode, built files are already available as store paths
     // Create the virtual paths mapping from the derived files
     let built_paths: HashMap<PathBuf, PathBuf> = derived_files
         .iter()
-        .map(|df| (df.build_path.clone(), PathBuf::from(df)))
+        .map(|df| (df.build_path.clone(), df.absolute_path(store_dir)))
         .collect();
 
     Ok((build_dir, built_paths))
@@ -90,15 +96,16 @@ fn prepare_build_environment() -> Result<(PathBuf, HashMap<PathBuf, PathBuf>)> {
 /// Stage 2: Discover dynamic dependencies by analyzing built files for includes
 pub fn discover_dynamic_dependencies(
     nix_tool: &NixTool,
-    store_dir: &Path,
+    store_dir: &StoreDir,
     build_dir: &Path,
     drv: &Derivation,
     built_paths: HashMap<PathBuf, PathBuf>,
 ) -> Result<(Vec<DerivedFile>, Vec<StorePath>)> {
-    let cmdline = drv
+    let cmdline_bytes = drv
         .args
         .first()
         .ok_or_else(|| anyhow!("No command line found in derivation"))?;
+    let cmdline = std::str::from_utf8(cmdline_bytes)?;
 
     let files: Vec<PathBuf> = built_paths.keys().cloned().collect();
 
@@ -118,14 +125,21 @@ pub fn update_derivation_with_discoveries(
     drv: &mut Derivation,
     discovered_deps: Vec<DerivedFile>,
     discovered_store_paths: Vec<StorePath>,
+    store_dir: &StoreDir,
 ) -> Result<Vec<DerivedFile>> {
     for store_path in &discovered_store_paths {
-        drv.add_input_src(store_path);
+        drv.inputs
+            .insert(SingleDerivedPath::Opaque(store_path.clone()));
     }
 
     // Get NIX_NINJA_INPUTS from derivation environment, these are the existing
     // inputs of the derivation without the discovered inputs.
-    let drv_inputs = drv.env.get("NIX_NINJA_INPUTS").map_or("", |v| v);
+    let key = b"NIX_NINJA_INPUTS";
+    let drv_inputs = drv
+        .env
+        .iter()
+        .find(|(k, _)| k.as_ref() == key)
+        .map_or("", |(_, v)| std::str::from_utf8(v).unwrap());
 
     // Parse existing derivation inputs into a HashSet for deduplication
     let mut input_set: HashSet<String> = drv_inputs
@@ -135,7 +149,7 @@ pub fn update_derivation_with_discoveries(
 
     let mut new_deps = Vec::new();
     for derived_file in discovered_deps {
-        let encoded = derived_file.to_encoded();
+        let encoded = derived_file.to_encoded(store_dir);
 
         // Skip if already in input set
         if input_set.contains(&encoded) {
@@ -144,14 +158,17 @@ pub fn update_derivation_with_discoveries(
 
         new_deps.push(derived_file.clone());
         input_set.insert(encoded);
-        drv.add_derived_path(&derived_file.derived_path);
+        drv.inputs.insert(derived_file.derived_path.clone());
     }
 
     if !new_deps.is_empty() {
         // Update NIX_NINJA_INPUTS with sorted list
         let mut inputs: Vec<String> = input_set.into_iter().collect();
         inputs.sort();
-        drv.set_env("NIX_NINJA_INPUTS", &inputs.join(" "));
+        drv.env.insert(
+            b"NIX_NINJA_INPUTS"[..].into(),
+            inputs.join(" ").into_bytes().into(),
+        );
     }
 
     Ok(new_deps)

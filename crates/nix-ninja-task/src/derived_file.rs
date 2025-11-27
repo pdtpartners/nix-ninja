@@ -1,6 +1,9 @@
+use anyhow::Context;
 use anyhow::{anyhow, Result};
-use nix_libstore::derived_path::SingleDerivedPath;
-use nix_libstore::store_path::StorePath;
+use harmonia_store_core::derived_path::SingleDerivedPath;
+use harmonia_store_core::placeholder::StorePathOrPlaceholder;
+use harmonia_store_core::store_path::StoreDir;
+use harmonia_store_core::store_path::StorePath;
 use std::fmt;
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -23,15 +26,12 @@ impl DerivedFile {
     /// Encodes this DerivedFile for passing from nix-ninja to nix-ninja-task.
     ///
     /// Format: `"<path_or_placeholder>:<build_path>:<rel_path>"`
-    pub fn to_encoded(&self) -> String {
-        let path_str = match &self.derived_path {
-            SingleDerivedPath::Opaque(store_path) => {
-                store_path.path().to_string_lossy().to_string()
-            }
-            SingleDerivedPath::Built(built_path) => {
-                built_path.placeholder().to_string_lossy().to_string()
-            }
-        };
+    ///
+    /// where `<path>` is *without* the store dir. (That is known from context.)
+    pub fn to_encoded(&self, store_dir: &StoreDir) -> String {
+        let path_str = store_dir
+            .display(&StorePathOrPlaceholder::from(&self.derived_path))
+            .to_string();
         let rel_path_str = self
             .rel_path
             .as_ref()
@@ -47,12 +47,14 @@ impl DerivedFile {
 
     /// Decodes a DerivedFile from the string format created by `to_encoded()`.
     /// Used by nix-ninja-task to recreate build directory symlinks.
-    pub fn from_encoded(encoded: &str) -> Result<Self> {
+    pub fn from_encoded(store_dir: &StoreDir, encoded: &str) -> Result<Self> {
         let mut parts = encoded.split(':');
-        let store_path =
-            StorePath::new(parts.next().ok_or_else(|| {
-                anyhow!("Missing store path in encoded derived file: {encoded}")
-            })?)?;
+        let store_path_str = parts
+            .next()
+            .ok_or_else(|| anyhow!("Missing store path in encoded derived file: {encoded}"))?;
+        let store_path: StorePath = store_dir
+            .parse(store_path_str)
+            .context("Parsing encoded store path")?;
         let derived_path = SingleDerivedPath::Opaque(store_path);
         let build_path = PathBuf::from(
             parts
@@ -67,32 +69,33 @@ impl DerivedFile {
             rel_path,
         })
     }
+
+    pub fn absolute_path(&self, store_dir: &StoreDir) -> PathBuf {
+        let base_path = PathBuf::from(
+            store_dir
+                .display(&StorePathOrPlaceholder::from(&self.derived_path))
+                .to_string(),
+        );
+        if let Some(rel_path) = &self.rel_path {
+            base_path.join(rel_path)
+        } else {
+            base_path
+        }
+    }
 }
 
 impl fmt::Display for DerivedFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let base_path = match &self.derived_path {
-            SingleDerivedPath::Opaque(store_path) => store_path.path().clone(),
-            SingleDerivedPath::Built(built_path) => built_path.placeholder(),
+        let base_path = match StorePathOrPlaceholder::from(&self.derived_path) {
+            StorePathOrPlaceholder::StorePath(store_path) => {
+                PathBuf::from(store_path.to_base_path())
+            }
+            StorePathOrPlaceholder::Placeholder(placeholder) => placeholder.render(),
         };
         if let Some(rel_path) = &self.rel_path {
             write!(f, "{}", base_path.join(rel_path).to_string_lossy())
         } else {
             write!(f, "{}", base_path.to_string_lossy())
-        }
-    }
-}
-
-impl From<&DerivedFile> for PathBuf {
-    fn from(df: &DerivedFile) -> Self {
-        let base_path = match &df.derived_path {
-            SingleDerivedPath::Opaque(store_path) => store_path.path().clone(),
-            SingleDerivedPath::Built(built_path) => built_path.placeholder(),
-        };
-        if let Some(rel_path) = &df.rel_path {
-            base_path.join(rel_path)
-        } else {
-            base_path
         }
     }
 }
@@ -103,11 +106,12 @@ impl From<&DerivedFile> for PathBuf {
 /// pointing to the actual file at `derived_file.rel_path`.
 pub fn create_symlinks(
     prefix: &std::path::Path,
+    store_dir: &StoreDir,
     inputs: Vec<DerivedFile>,
     overwrite: bool,
 ) -> Result<()> {
     for input in inputs {
-        let source_path = input.to_string();
+        let source_path = input.absolute_path(store_dir);
         let dest_path = prefix.join(&input.build_path);
 
         // Create parent directories if they don't exist
@@ -115,9 +119,10 @@ pub fn create_symlinks(
             fs::create_dir_all(parent)?;
         }
 
-        if !std::path::Path::new(&source_path).exists() {
+        if !source_path.exists() {
             return Err(anyhow!(
-                "nix-ninja-task: symlink source does not exist: {source_path}"
+                "nix-ninja-task: symlink source does not exist: {}",
+                source_path.to_string_lossy()
             ));
         }
 
@@ -128,7 +133,7 @@ pub fn create_symlinks(
         symlink(&source_path, &dest_path).map_err(|e| {
             anyhow!(
                 "Failed to create symlink from {} to {}: {}",
-                source_path,
+                source_path.to_string_lossy(),
                 dest_path.display(),
                 e
             )

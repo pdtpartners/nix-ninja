@@ -1,6 +1,6 @@
 use anyhow::Result;
-use clap::command;
 use clap::Parser;
+use harmonia_store_core::store_path::StoreDir;
 use nix_ninja_task::derived_file::{create_symlinks, DerivedFile};
 use nix_ninja_task::patchelf;
 use std::env;
@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 pub struct Cli {
     /// Specify the Nix store directory.
     #[arg(long = "store-dir", env = "NIX_STORE", default_value = "/nix/store")]
-    pub store_dir: PathBuf,
+    pub store_dir: StoreDir,
 
     /// Directory prefix to recreate sources via symlinks.
     #[arg(long = "build-dir", default_value = "/build/source/build")]
@@ -44,14 +44,14 @@ fn main() -> Result<()> {
     let mut inputs = Vec::new();
     for encoded in cli.inputs.split_whitespace() {
         // println!("Processing input {}", encoded);
-        let input = DerivedFile::from_encoded(encoded)?;
+        let input = DerivedFile::from_encoded(&cli.store_dir, encoded)?;
         inputs.push(input);
     }
 
     let mut outputs = Vec::new();
     for encoded in cli.outputs.split_whitespace() {
         // println!("Processing output {}", encoded);
-        let output = DerivedFile::from_encoded(encoded)?;
+        let output = DerivedFile::from_encoded(&cli.store_dir, encoded)?;
         outputs.push(output);
     }
 
@@ -59,7 +59,7 @@ fn main() -> Result<()> {
     // symlinked while preserving the original directory hierarchy of the
     // sources. This ensures relative includes and other path-dependent
     // references remain valid.
-    create_symlinks(&cli.build_dir, inputs, false)?;
+    create_symlinks(&cli.build_dir, &cli.store_dir, inputs, false)?;
     println!(
         "nix-ninja-task: Setup source directory in {}",
         cli.build_dir.display()
@@ -85,7 +85,7 @@ fn main() -> Result<()> {
 
     // Fix ELF RPATH to ensure it's linked against /nix/store paths rather
     // than relative path binaries in the build dir.
-    patchelf::fix_rpaths(&cli.store_dir, &outputs)?;
+    patchelf::fix_rpaths(cli.store_dir.to_path(), &outputs)?;
 
     // Outputs must be created in build directory and then copied out because
     // ninja build rules can have implicit outputs that we have no way of
@@ -96,7 +96,7 @@ fn main() -> Result<()> {
         outputs.len(),
     );
     for output in &outputs {
-        let target_path = PathBuf::from(&output.to_string());
+        let target_path = output.absolute_path(&cli.store_dir);
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }

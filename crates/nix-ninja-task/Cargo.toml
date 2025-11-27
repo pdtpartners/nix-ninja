@@ -9,4 +9,4 @@ license = "MIT"
 anyhow = "1.0"
 clap = { version = "4.4", features = ["derive", "env"] }
 elf = "0.8"
-nix-libstore = { path = "../nix-libstore" }
+harmonia-store-core = { workspace = true }

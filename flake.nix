@@ -2,8 +2,13 @@
   description = "Ninja compatible incremental C/C++ build system with Nix ";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    nix.url = "github:hinshun/nix/2.27.1-fix-nix-missing-includes";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nix = {
+      url = "github:NixOS/nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.nixpkgs-23-11.follows = "";
+      inputs.nixpkgs-regression.follows = "";
+    };
     globset = {
       url = "github:pdtpartners/globset";
       inputs.nixpkgs-lib.follows = "nixpkgs";

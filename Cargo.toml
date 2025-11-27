@@ -8,3 +8,7 @@ edition = "2021"
 
 [workspace.metadata.crane]
 name = "nix-ninja"
+
+[workspace.dependencies]
+harmonia-store-core = { git = "https://github.com/nix-community/harmonia.git" }
+harmonia-utils-hash = "0.0.0-alpha.0"

@@ -1,6 +1,7 @@
 use crate::task;
 use anyhow::bail;
 use anyhow::{anyhow, Result};
+use harmonia_store_core::store_path::StoreDir;
 use n2::densemap::DenseMap;
 use n2::graph::{Build, BuildId, FileId, Graph};
 use n2::{canon, load, scanner};
@@ -12,7 +13,7 @@ use std::path::PathBuf;
 
 pub struct BuildConfig {
     pub build_dir: PathBuf,
-    pub store_dir: PathBuf,
+    pub store_dir: StoreDir,
     pub nix_tool: String,
     pub is_output_derivation: bool,
 }
@@ -29,7 +30,7 @@ pub fn build(
         extra_args: Vec::new(),
     });
 
-    let tools = task::Tools::new(nix)?;
+    let tools = task::Tools::new(&config.store_dir, nix)?;
 
     let mut runner = task::Runner::new(
         tools,

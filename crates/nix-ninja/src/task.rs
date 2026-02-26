@@ -83,7 +83,7 @@ impl Deref for Task {
 pub struct BuildResult {
     pub bid: BuildId,
     pub derived_path: Option<SingleDerivedPath>,
-    pub derived_files: Vec<DerivedFile>,
+    pub derived_files_by_fid: Vec<(FileId, Vec<DerivedFile>)>,
     pub err: Option<Error>,
 }
 
@@ -97,7 +97,7 @@ pub struct RunnerConfig {
 
 /// Runner is an async runtime that spawns threads for each task.
 pub struct Runner {
-    pub derived_files: HashMap<FileId, DerivedFile>,
+    pub derived_files: HashMap<FileId, Vec<DerivedFile>>,
     build_dir_inputs: HashMap<FileId, DerivedFile>,
 
     tx: mpsc::Sender<BuildResult>,
@@ -198,7 +198,9 @@ impl Runner {
         let config = self.config.clone();
         let nix_build_lock = self.nix_build_lock.clone();
         std::thread::spawn(move || {
-            let (derived_path, err) =
+            let (derived_path, derived_files_by_fid, err) = if task.cmdline.is_none() {
+                (None, phony_output_mappings(task.outs(), &task.inputs), None)
+            } else {
                 match build_task_derivation(tools.clone(), task.clone()) {
                     Ok(drv) => match handle_derivation_result(
                         tools.clone(),
@@ -207,30 +209,44 @@ impl Runner {
                         &config,
                         nix_build_lock,
                     ) {
-                        Ok(final_derived_path) => (Some(final_derived_path), None),
-                        Err(err) => (None, Some(err.context(format!("Failed to handle derivation result for task '{}' (derivation: {})\nDerivation JSON:\n{}", task.name, drv.name, drv.to_json_pretty().unwrap_or_else(|_| "Failed to serialize derivation".to_string()))))),
+                        Ok(final_derived_path) => {
+                            let mut outputs_by_fid: Vec<(FileId, Vec<DerivedFile>)> = Vec::new();
+                            for fid in task.outs() {
+                                let file = &task.files[fid];
+                                let built_file = new_built_file(
+                                    final_derived_path.clone(),
+                                    file.name.clone().into(),
+                                );
+                                outputs_by_fid.push((*fid, vec![built_file]));
+                            }
+                            (Some(final_derived_path), outputs_by_fid, None)
+                        }
+                        Err(err) => (
+                            None,
+                            Vec::new(),
+                            Some(err.context(format!(
+                                "Failed to handle derivation result for task '{}' (derivation: {})\nDerivation JSON:\n{}",
+                                task.name,
+                                drv.name,
+                                drv.to_json_pretty().unwrap_or_else(|_| "Failed to serialize derivation".to_string())
+                            ))),
+                        ),
                     },
-                    Err(err) => (None, Some(err.context(format!("Failed to build task derivation for task '{}'", task.name)))),
-                };
-
-            // Create DerivedFiles for all outputs if successful
-            let derived_files = if let Some(ref final_derived_path) = derived_path {
-                let mut drv_outputs: Vec<DerivedFile> = Vec::new();
-                for fid in task.outs() {
-                    let file = &task.files[fid];
-                    let built_file =
-                        new_built_file(final_derived_path.clone(), file.name.clone().into());
-                    drv_outputs.push(built_file);
+                    Err(err) => (
+                        None,
+                        Vec::new(),
+                        Some(err.context(format!(
+                            "Failed to build task derivation for task '{}'",
+                            task.name
+                        ))),
+                    ),
                 }
-                drv_outputs
-            } else {
-                Vec::new()
             };
 
             let result = BuildResult {
                 bid,
                 derived_path,
-                derived_files,
+                derived_files_by_fid,
                 err,
             };
             let _ = tx.send(result);
@@ -239,7 +255,7 @@ impl Runner {
         Ok(())
     }
 
-    pub fn wait(&mut self, files: &mut graph::GraphFiles) -> Result<BuildId> {
+    pub fn wait(&mut self) -> Result<BuildId> {
         let result = self.rx.recv().unwrap();
         if let Some(err) = result.err {
             eprintln!("Error: {err}");
@@ -264,8 +280,10 @@ impl Runner {
             ));
         }
 
-        for derived_file in result.derived_files {
-            self.add_derived_file(files, derived_file.clone());
+        for (fid, mut derived_files) in result.derived_files_by_fid {
+            derived_files.sort();
+            derived_files.dedup();
+            self.derived_files.insert(fid, derived_files);
         }
 
         Ok(result.bid)
@@ -282,7 +300,11 @@ impl Runner {
             None => files.id_from_canonical(path_str),
         };
 
-        self.derived_files.entry(fid).or_insert(derived_file);
+        let entry = self.derived_files.entry(fid).or_default();
+        if !entry.contains(&derived_file) {
+            entry.push(derived_file);
+            entry.sort();
+        }
 
         fid
     }
@@ -301,33 +323,36 @@ impl Runner {
         // they must all be linked into the derivation's source directory.
         let mut input_set: HashMap<PathBuf, DerivedFile> = HashMap::new();
         for fid in build.ordering_ins() {
-            // TODO: what about phony inputs?
-            let input = match self.derived_files.get(fid) {
-                Some(df) => df.to_owned(),
-                None => {
-                    let file = &files.by_id[*fid];
-                    if file.name.starts_with(&store_dir) {
-                        // TODO: Perhaps need to add this as inputSrc? But
-                        // will also have to change DerivedFile to have source
-                        // Option<PathBuf>, because we don't want it to be
-                        // added to $NIX_NINJA_INPUTS.
-                        // DerivedFile {
-                        //     path: SingleDerivedPath::Opaque(StorePath::new(file.name)),
-                        //     source: &file.name,
-                        // }
-                        continue;
-                    }
-
-                    let input = new_opaque_file(
-                        &self.tools.nix_tool,
-                        &self.config.build_dir,
-                        file.name.clone().into(),
-                    )?;
-                    self.add_derived_file(files, input.clone().to_owned());
-                    input.to_owned()
+            if let Some(derived_files) = self.derived_files.get(fid) {
+                for input in derived_files {
+                    input_set.insert(input.build_path.clone(), input.clone());
                 }
-            };
-            input_set.insert(input.build_path.clone(), input.clone());
+                continue;
+            }
+
+            let file = &files.by_id[*fid];
+            if file.name == "." {
+                continue;
+            }
+            if file.name.starts_with(&store_dir) {
+                // TODO: Perhaps need to add this as inputSrc? But
+                // will also have to change DerivedFile to have source
+                // Option<PathBuf>, because we don't want it to be
+                // added to $NIX_NINJA_INPUTS.
+                // DerivedFile {
+                //     path: SingleDerivedPath::Opaque(StorePath::new(file.name)),
+                //     source: &file.name,
+                // }
+                continue;
+            }
+
+            let input = new_opaque_file(
+                &self.tools.nix_tool,
+                &self.config.build_dir,
+                file.name.clone().into(),
+            )?;
+            self.add_derived_file(files, input.clone());
+            input_set.insert(input.build_path.clone(), input);
         }
 
         let Some(primary_fid) = build.outs().iter().next() else {
@@ -354,30 +379,31 @@ impl Runner {
                 let Some(fid) = files.lookup(&arg) else {
                     continue;
                 };
-                let input = match self.derived_files.get(&fid) {
-                    Some(derived_file) => derived_file,
-                    None => match self.build_dir_inputs.get(&fid) {
-                        Some(derived_file) => derived_file,
-                        None => {
-                            continue;
-                        }
-                    },
+                if let Some(derived_files) = self.derived_files.get(&fid) {
+                    for input in derived_files {
+                        input_set.insert(input.build_path.clone(), input.clone());
+                    }
+                    continue;
+                }
+
+                let Some(input) = self.build_dir_inputs.get(&fid) else {
+                    continue;
                 };
                 input_set.insert(input.build_path.clone(), input.clone());
             }
-        }
 
-        // TODO: Can we avoid this? Technically the build rule isn't complete.
-        //
-        // Currently need this because there are rules that depend on
-        // configuration phase generated files in Cpp Nix for example
-        // `src/libutil/config-util.hh` which has a command like:
-        // `-Isrc/libutil -include config-util.hh`.
-        //
-        // One way is to parse all the includes, then add it to our search
-        // path above.
-        for input in self.build_dir_inputs.values() {
-            input_set.insert(input.build_path.clone(), input.clone());
+            // TODO: Can we avoid this? Technically the build rule isn't complete.
+            //
+            // Currently need this because there are rules that depend on
+            // configuration phase generated files in Cpp Nix for example
+            // `src/libutil/config-util.hh` which has a command like:
+            // `-Isrc/libutil -include config-util.hh`.
+            //
+            // One way is to parse all the includes, then add it to our search
+            // path above.
+            for input in self.build_dir_inputs.values() {
+                input_set.insert(input.build_path.clone(), input.clone());
+            }
         }
 
         let mut inputs: Vec<DerivedFile> = input_set.into_values().collect();
@@ -408,20 +434,25 @@ impl Runner {
     }
 }
 
+fn phony_output_mappings<T: Copy, U: Clone>(outputs: &[T], inputs: &[U]) -> Vec<(T, Vec<U>)> {
+    outputs
+        .iter()
+        .map(|output| (*output, inputs.to_vec()))
+        .collect()
+}
+
 fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
-    let cmdline = match &task.cmdline {
-        Some(c) => c,
-        None => {
-            return Err(anyhow!("Phony tasks not yet supported"));
-        }
-    };
+    let cmdline = task
+        .cmdline
+        .clone()
+        .ok_or_else(|| anyhow!("Missing command line for task '{}'", task.name))?;
 
     let mut drv = Derivation::new(
         &task.name,
         &task.system,
         &format!("{}/bin/nix-ninja-task", tools.nix_ninja_task),
     );
-    drv.add_arg(cmdline);
+    drv.add_arg(&cmdline);
 
     if let Some(desc) = &task.desc {
         drv.add_arg(&format!("--description={desc}"));
@@ -432,7 +463,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
         let final_value = if key == "NIX_CFLAGS_COMPILE" {
             // Also add a deterministic random seed based on the task's
             // cmdline for reproducible builds.
-            let deterministic_seed = generate_frandom_seed(cmdline);
+            let deterministic_seed = generate_frandom_seed(&cmdline);
             format!("{value} -frandom-seed={deterministic_seed}")
         } else {
             value.clone()
@@ -464,7 +495,6 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
 
     // Handle when rule's dep = gcc, which means we need to find all the
     // implicit header dependencies normally handled by gcc's depfiles.
-    let mut discovered_inputs: Vec<DerivedFile> = Vec::new();
     if let Some(deps) = &task.deps {
         if deps == "gcc" {
             // Only opaque inputs are processed by gcc
@@ -481,7 +511,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
                 &tools.nix_tool,
                 &task.store_dir,
                 &task.build_dir,
-                cmdline,
+                &cmdline,
                 files,
                 None,
             )?;
@@ -502,7 +532,6 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
 
                 input_set.insert(encoded);
                 drv.add_derived_path(&derived_file.derived_path);
-                discovered_inputs.push(derived_file);
             }
         }
     }
@@ -515,9 +544,20 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
 
     // Add all ninja build outputs.
     let mut outputs: Vec<String> = Vec::new();
+    let mut seen_outputs: HashSet<PathBuf> = HashSet::new();
     for output_path in &task.outputs {
+        let relative_output =
+            relative_from(output_path, &task.build_dir).unwrap_or_else(|| output_path.clone());
+        let mut output_name = relative_output.to_string_lossy().into_owned();
+        canon::canonicalize_path(&mut output_name);
+        let canonical_output = PathBuf::from(output_name);
+
+        if !seen_outputs.insert(canonical_output.clone()) {
+            continue;
+        }
+
         // Declare a content addressed output.
-        let normalized_name = normalize_output(&output_path.to_string_lossy());
+        let normalized_name = normalize_output(&canonical_output.to_string_lossy());
         drv.add_ca_output(&normalized_name, HashAlgorithm::Sha256, OutputHashMode::Nar);
 
         // Create a placeholder and encode output for nix-ninja-task.
@@ -525,8 +565,8 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
         let encoded = format!(
             "{}:{}:{}",
             &placeholder.render().display(),
-            &output_path.display(),
-            &output_path.display()
+            &canonical_output.display(),
+            &canonical_output.display()
         );
         outputs.push(encoded);
     }
@@ -545,11 +585,10 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
             .next()
             .ok_or_else(|| anyhow!("No command found in cmdline"))?;
 
-        // TODO: If you don't find it it's ok, e.g. ./generated_binary
-        let cmdline_path = which_store_path(cmdline_binary)?;
-
-        drv.add_input_src(&cmdline_path);
-        path.push(format!("{cmdline_path}/bin"));
+        if let Some(cmdline_path) = cmdline_binary_store_path(cmdline_binary)? {
+            drv.add_input_src(&cmdline_path);
+            path.push(format!("{cmdline_path}/bin"));
+        }
         drv.set_env("PATH", &path.join(":"));
     }
 
@@ -720,6 +759,23 @@ pub fn which_store_path(binary_name: &str) -> Result<StorePath> {
     StorePath::new(store_path)
 }
 
+fn cmdline_binary_store_path(binary_name: &str) -> Result<Option<StorePath>> {
+    if let Ok(path) = which_store_path(binary_name) {
+        return Ok(Some(path));
+    }
+
+    if !binary_name.starts_with("/nix/store/") {
+        return Ok(None);
+    }
+
+    let store_path = Path::new(binary_name)
+        .parent() // Get bin/ directory
+        .and_then(|p| p.parent()) // Get the store path ($out)
+        .ok_or_else(|| anyhow!("Cannot determine store path from binary: {binary_name}"))?;
+
+    Ok(Some(StorePath::new(store_path)?))
+}
+
 fn extract_store_paths(store_regex: &Regex, s: &str) -> Result<Vec<StorePath>> {
     let mut store_paths = Vec::new();
     for cap in store_regex.find_iter(s) {
@@ -826,4 +882,29 @@ fn generate_frandom_seed(cmdline: &str) -> String {
     hasher.update(cmdline.as_bytes());
     let result = hasher.finalize();
     format!("{result:x}")[..16].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::phony_output_mappings;
+
+    #[test]
+    fn phony_outputs_clone_inputs_per_output() {
+        let outputs = vec![1usize, 2usize];
+        let inputs = vec!["a".to_string(), "b".to_string()];
+
+        let mappings = phony_output_mappings(&outputs, &inputs);
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings[0], (1usize, inputs.clone()));
+        assert_eq!(mappings[1], (2usize, inputs));
+    }
+
+    #[test]
+    fn phony_outputs_allow_empty_inputs() {
+        let outputs = vec![7usize];
+        let inputs: Vec<String> = Vec::new();
+
+        let mappings = phony_output_mappings(&outputs, &inputs);
+        assert_eq!(mappings, vec![(7usize, Vec::new())]);
+    }
 }

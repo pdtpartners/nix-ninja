@@ -23,6 +23,7 @@
       example-multi-source = pkgs.example-multi-source.target;
       example-shared-lib = pkgs.example-shared-lib.target;
       example-dynamic-deps = pkgs.example-dynamic-deps.target;
+      example-cmake = pkgs.example-cmake.target;
       example-nix = pkgs.example-nix.target;
     };
 
@@ -31,6 +32,7 @@
 
       packages = with pkgs; [
         agg
+        cmake
         gnumake
         just
         meson

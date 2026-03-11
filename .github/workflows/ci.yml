@@ -55,6 +55,6 @@ jobs:
       - name: Setup Nix
         uses: ./.github/actions/setup-nix
       - name: Build NixOS test driver
-        run: nix build .#driver-${{ matrix.test }}
+        run: nix build -L .#driver-${{ matrix.test }}
       - name: Run integration tests
         run: nix run -L .#test-${{ matrix.test }}

@@ -5,5 +5,6 @@
     nixosTests.nix-build-multi-source = import ./tests/nix-build-multi-source.nix;
     nixosTests.nix-build-shared-lib = import ./tests/nix-build-shared-lib.nix;
     nixosTests.nix-build-dynamic-deps = import ./tests/nix-build-dynamic-deps.nix;
+    nixosTests.nix-build-cmake = import ./tests/nix-build-cmake.nix;
   };
 }

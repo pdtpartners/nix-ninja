@@ -47,6 +47,9 @@ Then you can try building the examples:
 # Builds a basic main.cpp.
 nix build github:pdtpartners/nix-ninja#example-hello
 
+# Builds a basic CMake project via a Ninja build graph.
+nix build github:pdtpartners/nix-ninja#example-cmake
+
 # Builds a basic main.cpp with dependency inference for its header.
 nix build github:pdtpartners/nix-ninja#example-header
 

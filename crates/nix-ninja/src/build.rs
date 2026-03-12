@@ -6,6 +6,7 @@ use n2::graph::{Build, BuildId, FileId, Graph};
 use n2::{canon, load, scanner};
 use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::{NixTool, StoreConfig};
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -21,7 +22,11 @@ pub fn build(
     build_filename: &str,
     targets: Vec<String>,
     config: BuildConfig,
-) -> Result<DerivedFile> {
+) -> Result<Vec<DerivedFile>> {
+    if targets.is_empty() {
+        return Err(anyhow!("at least one target is required"));
+    }
+
     let mut loader = load_file(build_filename)?;
 
     let nix = NixTool::new(StoreConfig {
@@ -44,26 +49,31 @@ pub fn build(
 
     let mut scheduler = Scheduler::new(&mut loader.graph, &mut runner);
 
-    // TODO: Support multiple targets, probably treat it like a dynamically
-    // generated phony target.
-    let Some(name) = targets.first() else {
-        return Err(anyhow!("unimplemented"));
-    };
-    let fid = scheduler
-        .lookup(name)
-        .ok_or_else(|| anyhow!("unknown path requested: {}", name))?;
-    let _ = scheduler.want_file(fid);
+    let mut target_fids: Vec<(String, FileId)> = Vec::new();
+    for name in &targets {
+        let fid = scheduler
+            .lookup(name)
+            .ok_or_else(|| anyhow!("unknown path requested: {}", name))?;
+        scheduler.want_file(fid)?;
+        target_fids.push((name.clone(), fid));
+    }
     scheduler.run()?;
 
-    // println!("Successfully generated all derivations");
+    let mut output_set: HashMap<PathBuf, DerivedFile> = HashMap::new();
+    for (name, fid) in target_fids {
+        let derived_files = runner.derived_files.get(&fid).ok_or(anyhow!(
+            "Missing derived file {:?} for target {}",
+            fid,
+            name
+        ))?;
+        for derived_file in derived_files {
+            output_set.insert(derived_file.build_path.clone(), derived_file.clone());
+        }
+    }
 
-    let derived_file = runner.derived_files.get(&fid).ok_or(anyhow!(
-        "Missing derived file {:?} for target {}",
-        fid,
-        name
-    ))?;
-
-    Ok(derived_file.clone())
+    let mut outputs: Vec<DerivedFile> = output_set.into_values().collect();
+    outputs.sort();
+    Ok(outputs)
 }
 
 fn load_file(build_filename: &str) -> Result<load::Loader> {
@@ -304,7 +314,7 @@ impl<'a> Scheduler<'a> {
                 continue;
             }
 
-            let bid = self.runner.wait(&mut self.graph.files)?;
+            let bid = self.runner.wait()?;
             // println!("Derivation for build {:?} has been written", &bid);
             self.ready_dependents(bid);
         }

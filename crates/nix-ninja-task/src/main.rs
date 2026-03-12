@@ -75,9 +75,15 @@ fn main() -> Result<()> {
         println!("nix-ninja-task: {desc}");
     }
 
+    // CMake sometimes emits absolute build-dir prefixes like
+    // `cd /build/<src>/build && ...`, which are invalid after we recreate the
+    // build tree under /build/source/build. Strip that prefix and run in the
+    // recreated build dir we already chdir'd into.
+    let normalized_cmdline = normalize_cmdline(&cli.cmdline);
+
     // Spawn cmdline process via sh like ninja upstream does.
-    println!("nix-ninja-task: Running: /bin/sh -c \"{}\"", cli.cmdline);
-    let exit_code = spawn_process(&cli.cmdline)?;
+    println!("nix-ninja-task: Running: /bin/sh -c \"{normalized_cmdline}\"");
+    let exit_code = spawn_process(&normalized_cmdline)?;
     if exit_code != 0 {
         println!("nix-ninja-task: Failed with exit code {exit_code}");
         std::process::exit(exit_code);
@@ -129,4 +135,32 @@ fn spawn_process(cmdline: &str) -> Result<i32> {
 
     let output = cmd.status()?;
     Ok(output.code().unwrap_or(1))
+}
+
+fn normalize_cmdline(cmdline: &str) -> String {
+    let trimmed = cmdline.trim();
+    let without_cd = match trimmed.split_once("&&") {
+        Some((prefix, rest)) if prefix.trim_start().starts_with("cd /build/") => rest.trim_start(),
+        _ => trimmed,
+    };
+
+    if let Some(alias) = extract_build_alias(without_cd) {
+        let old_prefix = format!("{alias}/");
+        return without_cd.replace(&old_prefix, "/build/source/");
+    }
+
+    without_cd.to_string()
+}
+
+fn extract_build_alias(cmdline: &str) -> Option<String> {
+    for (idx, _) in cmdline.match_indices("/build/") {
+        let mut rest = &cmdline[idx + "/build/".len()..];
+        let slash_idx = rest.find('/')?;
+        rest = &rest[..slash_idx];
+        if rest.is_empty() || rest == "source" {
+            continue;
+        }
+        return Some(format!("/build/{rest}"));
+    }
+    None
 }

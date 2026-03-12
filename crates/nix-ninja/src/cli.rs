@@ -94,12 +94,19 @@ pub fn run() -> Result<i32> {
     }
 
     match build(&cli, &build_dir) {
-        Ok(derived_file) => {
+        Ok(derived_files) => {
             if cli.is_output_derivation {
+                if derived_files.len() != 1 {
+                    return Err(anyhow!(
+                        "Expected exactly one derivation output, got {}",
+                        derived_files.len()
+                    ));
+                }
+                let derived_file = &derived_files[0];
                 let out = env::var("out").map_err(|_| anyhow!("Expected $out to be set"))?;
                 fs::copy(derived_file.derived_path.store_path().path(), out)?;
-            } else {
-                local::symlink_derived_files(&nix_tool, &build_dir, &[derived_file])?;
+            } else if !derived_files.is_empty() {
+                local::symlink_derived_files(&nix_tool, &build_dir, &derived_files)?;
             }
             Ok(0)
         }
@@ -110,7 +117,7 @@ pub fn run() -> Result<i32> {
     }
 }
 
-fn build(cli: &Cli, build_dir: &Path) -> Result<DerivedFile> {
+fn build(cli: &Cli, build_dir: &Path) -> Result<Vec<DerivedFile>> {
     let config = BuildConfig {
         build_dir: build_dir.to_path_buf(),
         store_dir: cli.store_dir.clone(),
@@ -140,8 +147,14 @@ fn subtool(
         }
         "drv" => {
             let cli = Cli::parse();
-            let derived_file = build(&cli, build_dir)?;
-            let output = nix_tool.derivation_show(&derived_file.derived_path.store_path())?;
+            let derived_files = build(&cli, build_dir)?;
+            if derived_files.len() != 1 {
+                return Err(anyhow!(
+                    "Expected exactly one derivation output, got {}",
+                    derived_files.len()
+                ));
+            }
+            let output = nix_tool.derivation_show(&derived_files[0].derived_path.store_path())?;
             let stdout = str::from_utf8(&output.stdout)?;
             println!("{stdout}");
         }

@@ -1,7 +1,7 @@
 use crate::build::{self, BuildConfig};
 use crate::local;
 use crate::subtool::dynamic_task;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context as _, Result};
 use clap::Parser;
 use harmonia_store_core::store_path::StoreDir;
 use nix_ninja_task::derived_file::DerivedFile;
@@ -119,7 +119,9 @@ fn build(cli: &Cli, build_dir: &Path) -> Result<DerivedFile> {
     };
 
     build::build(
-        &cli.build_filename.to_string_lossy(),
+        cli.build_filename
+            .to_str()
+            .context("Filename was not valid UTF-8")?,
         cli.targets.clone(),
         config,
     )

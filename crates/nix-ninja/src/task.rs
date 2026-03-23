@@ -15,6 +15,7 @@ use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::NixTool;
 use regex::Regex;
 use sha2::{Digest, Sha256};
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use std::{
     collections::{HashMap, HashSet},
@@ -57,7 +58,6 @@ impl Tools {
 /// target.
 #[derive(Clone)]
 struct Task {
-    name: String,
     system: String,
     wrapper_vars: HashMap<String, String>,
     input_srcs: Vec<StorePath>,
@@ -216,9 +216,9 @@ impl Runner {
                         nix_build_lock,
                     ) {
                         Ok(final_derived_path) => (Some(final_derived_path), None),
-                        Err(err) => (None, Some(err.context(format!("Failed to handle derivation result for task '{}' (derivation: {})\nDerivation JSON:\n{}", task.name, drv.name, serde_json::to_string_pretty(&drv).unwrap_or_else(|_| "Failed to serialize derivation".to_string()))))),
+                        Err(err) => (None, Some(err.context(format!("Failed to handle derivation result for task (derivation: {})\nDerivation JSON:\n{}", drv.name, serde_json::to_string_pretty(&drv).unwrap_or_else(|_| "Failed to serialize derivation".to_string()))))),
                     },
-                    Err(err) => (None, Some(err.context(format!("Failed to build task derivation for task '{}'", task.name)))),
+                    Err(err) => (None, Some(err.context("Failed to build task derivation for task".to_string()))),
                 };
 
             // Create DerivedFiles for all outputs if successful
@@ -342,12 +342,6 @@ impl Runner {
             input_set.insert(input.build_path.clone(), input.clone());
         }
 
-        let Some(primary_fid) = build.outs().iter().next() else {
-            return Err(anyhow!("Build has no outputs"));
-        };
-        let primary_file = &files.by_id[*primary_fid];
-        let name = normalize_output(&primary_file.name);
-
         let mut outputs: Vec<PathBuf> = Vec::new();
         for fid in build.outs() {
             let file = &files.by_id[*fid];
@@ -404,7 +398,6 @@ impl Runner {
         }
 
         Ok(Task {
-            name: format!("ninja-build-{name}"),
             system: self.config.system.clone(),
             wrapper_vars: self.wrapper_vars.clone(),
             input_srcs,
@@ -430,7 +423,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
     };
 
     let mut drv = Derivation::new(
-        task.name.parse()?,
+        "ninja-build".parse()?,
         task.system.clone().into_bytes().into(),
         format!(
             "{}/bin/nix-ninja-task",
@@ -689,7 +682,18 @@ fn build_dynamic_task_derivation(
 
     // Serialize the derivation to a temporary file and add to nix store
     let drv_json = serde_json::to_string(&input_drv)?;
-    let temp_file = std::env::temp_dir().join(format!("drv-{}.json", input_drv.name));
+    let drv_hash = {
+        // Hashes should be consistent within a rustc version, and this does not include random
+        // state.
+        let mut hasher = std::hash::DefaultHasher::new();
+        drv_json.hash(&mut hasher);
+        hasher.finish()
+    };
+    // Create an intermediate directory so that we don't pass through the hash to store names
+    let temp_dir = std::env::temp_dir().join(format!("drv-json-{:016x}", drv_hash));
+    std::fs::create_dir_all(&temp_dir)?;
+
+    let temp_file = temp_dir.join(format!("drv-{}.json", input_drv.name));
     fs::write(&temp_file, &drv_json)?;
     let drv_json_path = tools.nix_tool.store_add(store_dir, &temp_file)?;
 

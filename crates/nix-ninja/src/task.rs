@@ -653,9 +653,8 @@ fn build_dynamic_task_derivation(
         b"out"[..].into(),
         Placeholder::standard_output(&OutputName::from_str("out")?)
             .render()
-            .to_string_lossy()
-            .to_string()
-            .into_bytes()
+            .into_os_string()
+            .into_encoded_bytes()
             .into(),
     );
 
@@ -789,10 +788,12 @@ pub fn which_store_path(store_dir: &StoreDir, binary_name: &str) -> Result<Store
     let store_path_dir = canonical_path
         .parent() // Get bin/ directory
         .and_then(|p| p.parent()) // Get the store path ($out)
-        .ok_or_else(|| anyhow!("Cannot determine store path from binary: {}", binary_name))?;
+        .ok_or_else(|| anyhow!("Cannot determine store path from binary: {}", binary_name))?
+        .to_str()
+        .context("Path was not valid UTF-8")?;
 
     store_dir
-        .parse(&store_path_dir.to_string_lossy())
+        .parse(store_path_dir)
         .context("Failed to parse store path")
 }
 
@@ -822,7 +823,10 @@ fn new_opaque_file(
     path: PathBuf,
 ) -> Result<DerivedFile> {
     let relative_path = relative_from(&path, build_dir).unwrap_or(path);
-    let mut path = relative_path.to_string_lossy().into_owned();
+    let mut path = relative_path
+        .to_str()
+        .context("Path was not valid UTF-8")?
+        .to_owned();
     canon::canonicalize_path(&mut path);
 
     let canonical_path = fs::canonicalize(&path)?;
@@ -881,7 +885,8 @@ pub fn discover_c_includes(
         if let Ok(relative) = include.strip_prefix(AsRef::<Path>::as_ref(store_dir)) {
             if let Some(hash_path) = relative.components().next().map(|c| c.as_os_str()) {
                 let full_path = AsRef::<Path>::as_ref(store_dir).join(hash_path);
-                let store_path: StorePath = store_dir.parse(&full_path.to_string_lossy())?;
+                let store_path: StorePath =
+                    store_dir.parse(full_path.to_str().context("Path was not valid UTF-8")?)?;
                 discovered_store_paths.push(store_path);
                 continue;
             }

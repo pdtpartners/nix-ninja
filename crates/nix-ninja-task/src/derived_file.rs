@@ -93,9 +93,9 @@ impl fmt::Display for DerivedFile {
             StorePathOrPlaceholder::Placeholder(placeholder) => placeholder.render(),
         };
         if let Some(rel_path) = &self.rel_path {
-            write!(f, "{}", base_path.join(rel_path).to_string_lossy())
+            write!(f, "{:?}", base_path.join(rel_path))
         } else {
-            write!(f, "{}", base_path.to_string_lossy())
+            write!(f, "{:?}", base_path)
         }
     }
 }
@@ -121,8 +121,8 @@ pub fn create_symlinks(
 
         if !source_path.exists() {
             return Err(anyhow!(
-                "nix-ninja-task: symlink source does not exist: {}",
-                source_path.to_string_lossy()
+                "nix-ninja-task: symlink source does not exist: {:?}",
+                source_path
             ));
         }
 
@@ -132,8 +132,8 @@ pub fn create_symlinks(
 
         symlink(&source_path, &dest_path).map_err(|e| {
             anyhow!(
-                "Failed to create symlink from {} to {}: {}",
-                source_path.to_string_lossy(),
+                "Failed to create symlink from {:?} to {}: {}",
+                source_path,
                 dest_path.display(),
                 e
             )

@@ -1,13 +1,13 @@
 use anyhow::Result;
 use harmonia_store_derivation::derived_path::SingleDerivedPath;
 use harmonia_store_path::StoreDir;
+use nix_builder_rpc_client::BuilderRpcClient;
 use nix_ninja_task::derived_file::{create_symlinks, DerivedFile};
-use nix_tool::NixTool;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub fn build_derived_files(
-    nix_tool: &NixTool,
+    rpc_client: &BuilderRpcClient,
     store_dir: &StoreDir,
     derived_files: &[DerivedFile],
 ) -> Result<HashMap<PathBuf, PathBuf>> {
@@ -17,7 +17,7 @@ pub fn build_derived_files(
         .collect();
 
     // Build derived paths so the Nix store paths exist on the host.
-    let store_paths = nix_tool.build(store_dir, &derived_paths)?;
+    let store_paths = rpc_client.build_paths(store_dir, &derived_paths)?;
 
     // Create mapping from build_path to actual store path
     let built_paths: HashMap<PathBuf, PathBuf> = derived_files
@@ -37,7 +37,7 @@ pub fn build_derived_files(
 }
 
 pub fn symlink_derived_files(
-    nix_tool: &NixTool,
+    rpc_client: &BuilderRpcClient,
     store_dir: &StoreDir,
     prefix: &Path,
     derived_files: &[DerivedFile],
@@ -46,7 +46,7 @@ pub fn symlink_derived_files(
         .iter()
         .map(|df| df.derived_path.clone())
         .collect();
-    let store_paths = nix_tool.build(store_dir, &derived_paths)?;
+    let store_paths = rpc_client.build_paths(store_dir, &derived_paths)?;
 
     // Create new DerivedFiles with opaque store paths instead of placeholders
     let opaque_files: Vec<DerivedFile> = derived_files

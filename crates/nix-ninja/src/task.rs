@@ -12,18 +12,17 @@ use n2::{
     canon,
     graph::{self, Build, BuildDependencies, BuildId, File, FileId},
 };
+use nix_builder_rpc_client::BuilderRpcClient;
 use nix_ninja_task::derived_file::DerivedFile;
-use nix_tool::NixTool;
 use regex::Regex;
 use sha2::{Digest, Sha256};
-use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
     ops::Deref,
     path::{Path, PathBuf},
-    sync::{mpsc, Arc, Mutex},
+    sync::{mpsc, Arc},
 };
 use walkdir::WalkDir;
 use which::which;
@@ -33,19 +32,17 @@ pub struct Tools {
     pub cc: StorePath,
     pub coreutils: StorePath,
     pub nix: StorePath,
-    pub nix_tool: NixTool,
     pub nix_ninja: StorePath,
     pub nix_ninja_task: StorePath,
     pub patchelf: StorePath,
 }
 
 impl Tools {
-    pub fn new(store_dir: &StoreDir, nix_tool: NixTool) -> Result<Self> {
+    pub fn new(store_dir: &StoreDir) -> Result<Self> {
         Ok(Tools {
             cc: which_store_path(store_dir, "cc")?,
             coreutils: which_store_path(store_dir, "coreutils")?,
             nix: which_store_path(store_dir, "nix")?,
-            nix_tool,
             nix_ninja: which_store_path(store_dir, "nix-ninja")?,
             nix_ninja_task: which_store_path(store_dir, "nix-ninja-task")?,
             patchelf: which_store_path(store_dir, "patchelf")?,
@@ -108,15 +105,19 @@ pub struct Runner {
     tx: mpsc::Sender<BuildResult>,
     rx: mpsc::Receiver<BuildResult>,
     tools: Tools,
+    rpc_client: Arc<BuilderRpcClient>,
     config: RunnerConfig,
     wrapper_vars: HashMap<String, String>,
     wrapper_store_paths: Vec<StorePath>,
     store_regex: Regex,
-    nix_build_lock: Arc<Mutex<()>>,
 }
 
 impl Runner {
-    pub fn new(tools: Tools, config: RunnerConfig) -> Result<Self> {
+    pub fn new(
+        tools: Tools,
+        rpc_client: Arc<BuilderRpcClient>,
+        config: RunnerConfig,
+    ) -> Result<Self> {
         let store_dir_str = config.store_dir.to_string();
         let pattern = format!(
             r"{}\/[a-z0-9]{{32}}-[0-9a-zA-Z\+\-\._\?=]+",
@@ -126,7 +127,8 @@ impl Runner {
 
         let mut wrapper_vars = HashMap::new();
         for (key, value) in env::vars() {
-            if ["NIX_LDFLAGS", "NIX_CFLAGS_COMPILE"].contains(&key.as_str())
+            if key.starts_with("NIX_CFLAGS_COMPILE")
+                || key.starts_with("NIX_LDFLAGS")
                 || key.starts_with("NIX_CC_WRAPPER")
                 || key.starts_with("NIX_BINTOOLS_WRAPPER")
             {
@@ -134,11 +136,13 @@ impl Runner {
             }
         }
 
-        // Remove -frandom-seed from NIX_CFLAGS_COMPILE as we'll calculate it
+        // Remove -frandom-seed from NIX_CFLAGS_COMPILE* as we'll calculate it
         // per task derivation. Otherwise this will be different every time
         // breaking incrementality.
-        if let Some(cflags) = wrapper_vars.get_mut("NIX_CFLAGS_COMPILE") {
-            *cflags = remove_frandom_seed(cflags);
+        for (key, value) in wrapper_vars.iter_mut() {
+            if key.starts_with("NIX_CFLAGS_COMPILE") {
+                *value = remove_frandom_seed(value);
+            }
         }
 
         // Extract store paths from wrapper variables once
@@ -155,11 +159,11 @@ impl Runner {
             tx,
             rx,
             tools,
+            rpc_client,
             config,
             wrapper_vars,
             wrapper_store_paths,
             store_regex,
-            nix_build_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -181,12 +185,8 @@ impl Runner {
             }
 
             let path = entry.into_path();
-            let derived_file = new_opaque_file(
-                &self.tools.nix_tool,
-                &self.config.store_dir,
-                &self.config.build_dir,
-                path.clone(),
-            )?;
+            let derived_file =
+                new_opaque_file(&self.rpc_client, &self.config.build_dir, path.clone())?;
             let fid = self.add_derived_file(files, derived_file.clone());
             self.build_dir_inputs.insert(fid, derived_file);
         }
@@ -205,16 +205,16 @@ impl Runner {
         let task = self.new_task(files, build)?;
 
         let config = self.config.clone();
-        let nix_build_lock = self.nix_build_lock.clone();
+        let rpc_client = self.rpc_client.clone();
         std::thread::spawn(move || {
             let (derived_path, err) =
-                match build_task_derivation(tools.clone(), task.clone()) {
+                match build_task_derivation(tools.clone(), &rpc_client, task.clone()) {
                     Ok(drv) => match handle_derivation_result(
                         tools.clone(),
+                        &rpc_client,
                         task.clone(),
                         drv.clone(),
                         &config,
-                        nix_build_lock,
                     ) {
                         Ok(final_derived_path) => (Some(final_derived_path), None),
                         Err(err) => (None, Some(err.context(format!("Failed to handle derivation result for task (derivation: {})\nDerivation JSON:\n{}", drv.name, serde_json::to_string_pretty(&drv).unwrap_or_else(|_| "Failed to serialize derivation".to_string()))))),
@@ -331,8 +331,7 @@ impl Runner {
                     }
 
                     let input = new_opaque_file(
-                        &self.tools.nix_tool,
-                        &self.config.store_dir,
+                        &self.rpc_client,
                         &self.config.build_dir,
                         file.name.clone().into(),
                     )?;
@@ -349,13 +348,30 @@ impl Runner {
             outputs.push(PathBuf::from(&file.name));
         }
 
+        // Meson resolves `files(...)` in custom_target commands to absolute
+        // paths at configure time. Those paths do not exist inside the task
+        // sandbox, where inputs are symlinked at their build-dir-relative
+        // locations, so rewrite in-tree absolute paths to relative ones
+        // (mirroring `relative_from` in `new_opaque_file`).
+        let cmdline = build.cmdline.as_ref().map(|cmdline| {
+            let mut cmdline = cmdline.clone();
+            let build_dir = &self.config.build_dir;
+            if let Some(dir) = build_dir.to_str() {
+                cmdline = cmdline.replace(&format!("{dir}/"), "");
+            }
+            if let Some(dir) = build_dir.parent().and_then(|p| p.to_str()) {
+                cmdline = cmdline.replace(&format!("{dir}/"), "../");
+            }
+            cmdline
+        });
+
         // TODO: Can we avoid this? Technically the build rule isn't complete.
         //
         // The command may reference a file pre-generated by the configuration
         // step. We tracked files that existed in the build directory
         // beforehand, so we can see if there's anything that matches and add
         // it as an explicit input.
-        if let Some(cmdline) = &build.cmdline {
+        if let Some(cmdline) = &cmdline {
             let args = shell_words::split(cmdline)?;
             for arg in args {
                 let Some(fid) = files.lookup(&arg) else {
@@ -392,7 +408,7 @@ impl Runner {
 
         // Extract store paths from cmdline and add pre-extracted wrapper store paths
         let mut input_srcs = self.wrapper_store_paths.clone();
-        if let Some(cmdline) = &build.cmdline {
+        if let Some(cmdline) = &cmdline {
             let found_store_paths =
                 extract_store_paths(&self.config.store_dir, &self.store_regex, cmdline)?;
             input_srcs.extend(found_store_paths);
@@ -405,7 +421,7 @@ impl Runner {
             build_dir: self.config.build_dir.clone(),
             build_deps: build.dependencies.clone(),
             store_dir: self.config.store_dir.clone(),
-            cmdline: build.cmdline.clone(),
+            cmdline,
             desc: build.desc.clone(),
             deps: build.deps.clone(),
             files: build_files,
@@ -415,7 +431,11 @@ impl Runner {
     }
 }
 
-fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
+fn build_task_derivation(
+    tools: Tools,
+    rpc_client: &Arc<BuilderRpcClient>,
+    task: Task,
+) -> Result<Derivation> {
     let cmdline = match &task.cmdline {
         Some(c) => c,
         None => {
@@ -442,7 +462,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
 
     // Propagate wrapper environment variables to the task.
     for (key, value) in &task.wrapper_vars {
-        let final_value = if key == "NIX_CFLAGS_COMPILE" {
+        let final_value = if key.starts_with("NIX_CFLAGS_COMPILE") {
             // Also add a deterministic random seed based on the task's
             // cmdline for reproducible builds.
             let deterministic_seed = generate_frandom_seed(cmdline);
@@ -499,7 +519,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
                 .collect();
 
             let (discovered_deps, discovered_store_paths) = discover_c_includes(
-                &tools.nix_tool,
+                rpc_client,
                 &task.store_dir,
                 &task.build_dir,
                 cmdline,
@@ -558,7 +578,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
             "{}:{}:{}",
             placeholder.render().display(),
             output_path.display(),
-            output_path.display()
+            output_path.display(),
         );
         outputs.push(encoded);
     }
@@ -580,12 +600,15 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
             .next()
             .ok_or_else(|| anyhow!("No command found in cmdline"))?;
 
-        // TODO: If you don't find it it's ok, e.g. ./generated_binary
-        let cmdline_path = which_store_path(&task.store_dir, cmdline_binary)?;
-
-        drv.inputs
-            .insert(SingleDerivedPath::Opaque(cmdline_path.clone()));
-        path.push(format!("{}/bin", task.store_dir.display(&cmdline_path)));
+        // A command resolving outside the store (e.g. a `../gen.sh` script
+        // from the source tree) is a task input handled by
+        // `new_opaque_file` — it reaches the sandbox as an input symlink,
+        // so only store binaries become inputs and PATH entries here.
+        if let Some(cmdline_path) = which_store_path_opt(&task.store_dir, cmdline_binary)? {
+            drv.inputs
+                .insert(SingleDerivedPath::Opaque(cmdline_path.clone()));
+            path.push(format!("{}/bin", task.store_dir.display(&cmdline_path)));
+        }
         drv.env
             .insert(b"PATH"[..].into(), path.join(":").into_bytes().into());
     }
@@ -607,6 +630,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
 // and wrote that to its $deps output.
 fn build_dynamic_task_derivation(
     tools: Tools,
+    rpc_client: &Arc<BuilderRpcClient>,
     store_dir: &StoreDir,
     input_drv: Derivation,
     built_inputs: Vec<DerivedFile>,
@@ -656,6 +680,11 @@ fn build_dynamic_task_derivation(
     drv.args.push(b"-t"[..].into());
     drv.args.push(b"dynamic-task"[..].into());
 
+    // builder-rpc-v0 does not auto-export $name, but the outer-output rename needs it.
+    let dyn_drv_name = format!("{}.drv", input_drv.name);
+    drv.env
+        .insert(b"name"[..].into(), dyn_drv_name.into_bytes().into());
+
     // Propagate sources to dynamic task for it discover inputs.
     let src = env::var("src").map_err(|_| anyhow!("Expected $src to be set"))?;
     drv.env
@@ -674,28 +703,19 @@ fn build_dynamic_task_derivation(
         b"extra-experimental-features = nix-command ca-derivations dynamic-derivations"[..].into(),
     );
 
-    // Require recursive-nix to allow nix commands inside the build
+    // Require builder-rpc-v0 so the dynamic-task drv runs in a sandbox
+    // where the daemon socket is bind-mounted in restricted mode (see
+    // NixOS/nix#15793). nix-ninja's inside-sandbox calls then go through
+    // the worker protocol's restricted allowlist instead of recursive-nix.
     drv.env.insert(
         b"requiredSystemFeatures"[..].into(),
-        b"recursive-nix"[..].into(),
+        b"builder-rpc-v0"[..].into(),
     );
 
-    // Serialize the derivation to a temporary file and add to nix store
+    // Serialize the derivation and add it to the nix store
     let drv_json = serde_json::to_string(&input_drv)?;
-    let drv_hash = {
-        // Hashes should be consistent within a rustc version, and this does not include random
-        // state.
-        let mut hasher = std::hash::DefaultHasher::new();
-        drv_json.hash(&mut hasher);
-        hasher.finish()
-    };
-    // Create an intermediate directory so that we don't pass through the hash to store names
-    let temp_dir = std::env::temp_dir().join(format!("drv-json-{:016x}", drv_hash));
-    std::fs::create_dir_all(&temp_dir)?;
-
-    let temp_file = temp_dir.join(format!("drv-{}.json", input_drv.name));
-    fs::write(&temp_file, &drv_json)?;
-    let drv_json_path = tools.nix_tool.store_add(store_dir, &temp_file)?;
+    let drv_json_name = format!("drv-{}.json", input_drv.name);
+    let drv_json_path = rpc_client.add_to_store_text(&drv_json_name, drv_json.as_bytes())?;
 
     // Add derivation.json as input dependency and argument
     drv.inputs
@@ -715,10 +735,10 @@ fn build_dynamic_task_derivation(
 /// a dynamic task derivation or use the derivation directly.
 fn handle_derivation_result(
     tools: Tools,
+    rpc_client: &Arc<BuilderRpcClient>,
     task: Task,
     mut drv: Derivation,
     config: &RunnerConfig,
-    nix_build_lock: Arc<Mutex<()>>,
 ) -> Result<SingleDerivedPath> {
     // Collect built inputs when deps == "gcc" for dynamic dependency discovery
     let built_inputs: Vec<DerivedFile> = if task.deps.as_ref() == Some(&"gcc".to_string()) {
@@ -735,11 +755,14 @@ fn handle_derivation_result(
         // If we're in Nix sandbox, create a dynamic derivation to handle
         // dynamic dependencies.
         if config.is_output_derivation {
-            let dynamic_drv =
-                build_dynamic_task_derivation(tools.clone(), &config.store_dir, drv, built_inputs)?;
-            let dynamic_drv_path = tools
-                .nix_tool
-                .derivation_add(&config.store_dir, &dynamic_drv)?;
+            let dynamic_drv = build_dynamic_task_derivation(
+                tools.clone(),
+                rpc_client,
+                &config.store_dir,
+                drv,
+                built_inputs,
+            )?;
+            let dynamic_drv_path = rpc_client.add_drv_to_store(&config.store_dir, &dynamic_drv)?;
             Ok(SingleDerivedPath::Built {
                 drv_path: Arc::new(SingleDerivedPath::Opaque(dynamic_drv_path)),
                 output: "out".parse().unwrap(),
@@ -748,19 +771,12 @@ fn handle_derivation_result(
             // Otherwise, symlink these built_inputs into build_dir and do
             // dependency discovery locally.
 
-            let built_paths = {
-                // Serialize nix build calls to prevent log output interleaving
-                // when multiple tasks with dynamic dependencies run concurrently
-                //
-                // TODO: This isn't ideal, perhaps we buffer the logs or emit
-                // JSON events for log aggregation.
-                let _lock = nix_build_lock.lock().unwrap();
-                local::build_derived_files(&tools.nix_tool, &config.store_dir, &built_inputs)?
-            };
+            let built_paths =
+                local::build_derived_files(rpc_client, &config.store_dir, &built_inputs)?;
 
             let (discovered_deps, discovered_store_paths) =
                 dynamic_task::discover_dynamic_dependencies(
-                    &tools.nix_tool,
+                    rpc_client,
                     &config.store_dir,
                     &config.build_dir,
                     &drv,
@@ -774,21 +790,43 @@ fn handle_derivation_result(
                 &config.store_dir,
             )?;
 
-            let drv_path = tools.nix_tool.derivation_add(&config.store_dir, &drv)?;
+            let drv_path = rpc_client.add_drv_to_store(&config.store_dir, &drv)?;
             Ok(SingleDerivedPath::Opaque(drv_path))
         }
     } else {
-        let drv_path = tools.nix_tool.derivation_add(&config.store_dir, &drv)?;
+        let drv_path = rpc_client.add_drv_to_store(&config.store_dir, &drv)?;
         Ok(SingleDerivedPath::Opaque(drv_path))
     }
 }
 
 pub fn which_store_path(store_dir: &StoreDir, binary_name: &str) -> Result<StorePath> {
+    which_store_path_opt(store_dir, binary_name)?.ok_or_else(|| {
+        anyhow!(
+            "{} resolved to a path outside the Nix store ({})",
+            binary_name,
+            store_dir
+        )
+    })
+}
+
+/// Like [`which_store_path`], but returns `None` for a binary that resolves
+/// outside the Nix store (e.g. a script in the source tree).
+fn which_store_path_opt(store_dir: &StoreDir, binary_name: &str) -> Result<Option<StorePath>> {
     let binary_path =
         which(binary_name).map_err(|err| anyhow!("Failed to find {}: {}", binary_name, err))?;
 
     // Canonicalize will resolve all symlinks and return an absolute path
-    let canonical_path = std::fs::canonicalize(binary_path)?;
+    let canonical_path = std::fs::canonicalize(&binary_path).with_context(|| {
+        format!(
+            "canonicalize {} (from PATH lookup of {})",
+            binary_path.display(),
+            binary_name
+        )
+    })?;
+
+    if !canonical_path.starts_with(store_dir) {
+        return Ok(None);
+    }
 
     let store_path_dir = canonical_path
         .parent() // Get bin/ directory
@@ -800,6 +838,7 @@ pub fn which_store_path(store_dir: &StoreDir, binary_name: &str) -> Result<Store
     store_dir
         .parse(store_path_dir)
         .context("Failed to parse store path")
+        .map(Some)
 }
 
 fn extract_store_paths(
@@ -822,8 +861,7 @@ fn extract_store_paths(
 }
 
 fn new_opaque_file(
-    nix: &NixTool,
-    store_dir: &StoreDir,
+    rpc_client: &Arc<BuilderRpcClient>,
     build_dir: &std::path::Path,
     path: PathBuf,
 ) -> Result<DerivedFile> {
@@ -834,10 +872,20 @@ fn new_opaque_file(
         .to_owned();
     canon::canonicalize_path(&mut path);
 
-    let canonical_path = fs::canonicalize(&path)?;
-    let store_path = nix.store_add(store_dir, &canonical_path)?;
+    let canonical_path = fs::canonicalize(&path).with_context(|| format!("canonicalize {path}"))?;
+
+    // builder-rpc-v0 restricts the allowlist; `nix store add` issues
+    // AddTempRoot which the daemon refuses. Upload as a NAR-hashed CA
+    // object instead, which (unlike a text-CA object) preserves the file
+    // mode, notably the executable bit.
+    let name = canonical_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "source".to_string());
+    let store_path = rpc_client.add_to_store_nar(&name, &canonical_path)?;
+
     Ok(DerivedFile {
-        derived_path: SingleDerivedPath::Opaque(store_path.clone()),
+        derived_path: SingleDerivedPath::Opaque(store_path),
         build_path: relative_path,
         rel_path: None, // None for opaque files - store path points directly to file
     })
@@ -851,7 +899,7 @@ fn new_built_file(derived_path: SingleDerivedPath, build_path: PathBuf) -> Deriv
             output: output_name.parse().expect("invalid output name"),
         },
         build_path: build_path.clone(),
-        rel_path: Some(build_path), // For built files, rel_path same as build_path
+        rel_path: Some(build_path),
     }
 }
 
@@ -866,7 +914,7 @@ fn normalize_output(output: &str) -> String {
 /// - discovered_deps: DerivedFiles that need to be encoded and added to NIX_NINJA_INPUTS
 /// - discovered_store_paths: Store paths that only need to be added as input sources
 pub fn discover_c_includes(
-    nix_tool: &NixTool,
+    rpc_client: &Arc<BuilderRpcClient>,
     store_dir: &StoreDir,
     build_dir: &Path,
     cmdline: &str,
@@ -898,7 +946,7 @@ pub fn discover_c_includes(
         }
 
         // Regular file, add to nix store and treat as derived dependency
-        let derived_file = new_opaque_file(nix_tool, store_dir, build_dir, include)?;
+        let derived_file = new_opaque_file(rpc_client, build_dir, include)?;
         discovered_deps.push(derived_file);
     }
 

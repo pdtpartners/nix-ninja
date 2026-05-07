@@ -21,6 +21,14 @@ let
   ninjaDrv = stdenv.mkDerivation (args' // {
     name = "${name}.drv";
 
+    # Unfortunately stdenv's `genericBuild` assumes the `out` variable is set.
+    # That is generally a reasonable assumption as it is handled by nix,
+    # but it is intentionally left unset when running with `builder-rpc-v0`.
+    # For basic programs it is possible to avoid this hack by running `builtins.derivation`
+    # directly, without nixpkgs.
+    # For more complex programs, however, stdenv is necessary to run hooks, such as from `pkg-config`.
+    out = "/nonexistent";
+
     nativeBuildInputs = [
       coreutils
       meson
@@ -30,7 +38,7 @@ let
       patchelf
     ] ++ nativeBuildInputs;
 
-    requiredSystemFeatures = [ "recursive-nix" ];
+    requiredSystemFeatures = [ "builder-rpc-v0" ];
 
     preConfigure = ''
       export NIX_NINJA_DRV="true"

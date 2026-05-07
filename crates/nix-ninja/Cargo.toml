@@ -15,8 +15,8 @@ harmonia-store-path = { workspace = true }
 harmonia-utils-hash = { workspace = true }
 include-graph = { git = "https://github.com/hinshun/igraph", branch = "performance-improvements" }
 n2 = { git = "https://github.com/hinshun/n2", branch = "feature/minimal-pub", default-features = false }
+nix-builder-rpc-client = { path = "../nix-builder-rpc-client" }
 nix-ninja-task = { path = "../nix-ninja-task" }
-nix-tool = { path = "../nix-tool" }
 regex = "1"
 serde = "1"
 serde_json = "1"

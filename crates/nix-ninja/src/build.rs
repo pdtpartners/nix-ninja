@@ -5,16 +5,15 @@ use harmonia_store_path::StoreDir;
 use n2::densemap::DenseMap;
 use n2::graph::{Build, BuildId, FileId, Graph};
 use n2::{canon, load, scanner};
+use nix_builder_rpc_client::BuilderRpcClient;
 use nix_ninja_task::derived_file::DerivedFile;
-use nix_tool::{NixTool, StoreConfig};
-use std::collections::HashSet;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct BuildConfig {
     pub build_dir: PathBuf,
     pub store_dir: StoreDir,
-    pub nix_tool: String,
     pub is_output_derivation: bool,
 }
 
@@ -22,18 +21,15 @@ pub fn build(
     build_filename: &str,
     targets: Vec<String>,
     config: BuildConfig,
+    rpc_client: &Arc<BuilderRpcClient>,
 ) -> Result<DerivedFile> {
     let mut loader = load_file(build_filename)?;
 
-    let nix = NixTool::new(StoreConfig {
-        nix_tool: config.nix_tool,
-        extra_args: Vec::new(),
-    });
-
-    let tools = task::Tools::new(&config.store_dir, nix)?;
+    let tools = task::Tools::new(&config.store_dir)?;
 
     let mut runner = task::Runner::new(
         tools,
+        rpc_client.clone(),
         task::RunnerConfig {
             system: "x86_64-linux".to_string(),
             build_dir: config.build_dir,

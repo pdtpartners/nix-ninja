@@ -88,6 +88,7 @@ in {
 
     nix.extraOptions = ''
       experimental-features = nix-command flakes dynamic-derivations ca-derivations recursive-nix
+      extra-system-features = builder-rpc-v0
     '';
   };
 

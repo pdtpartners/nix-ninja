@@ -156,6 +156,12 @@
         target = "main";
       };
 
+      example-run-script = self.mkMesonPackage {
+        name = "example-run-script";
+        src = ./examples/run-script;
+        target = "main";
+      };
+
       example-dynamic-deps= self.mkMesonPackage {
         name = "example-dynamic-deps";
         src = ./examples/dynamic-deps;

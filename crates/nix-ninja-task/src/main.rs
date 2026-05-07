@@ -95,14 +95,19 @@ fn main() -> Result<()> {
         "nix-ninja-task: Finished! Copying {} build outputs to derivation output paths",
         outputs.len(),
     );
-    for output in &outputs {
-        let target_path = output.absolute_path(&cli.store_dir);
+    copy_outputs_to_placeholders(&cli.store_dir, &outputs)?;
+
+    Ok(())
+}
+
+fn copy_outputs_to_placeholders(store_dir: &StoreDir, outputs: &[DerivedFile]) -> Result<()> {
+    for output in outputs {
+        let target_path = output.absolute_path(store_dir);
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }
         fs::copy(&output.build_path, &target_path)?;
     }
-
     Ok(())
 }
 

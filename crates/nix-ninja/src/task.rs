@@ -1,5 +1,6 @@
 use crate::local;
 use crate::relative_from::relative_from;
+use crate::rpc_client::RpcClient;
 use crate::subtool::dynamic_task;
 use anyhow::{anyhow, Context, Error, Result};
 use deps_infer::c_include_parser;
@@ -36,6 +37,9 @@ pub struct Tools {
     pub nix_ninja: StorePath,
     pub nix_ninja_task: StorePath,
     pub patchelf: StorePath,
+    pub rpc_client: RpcClient,
+    /// ATerm bytes kept because builder-rpc-v0 does not materialize uploaded .drv files in the sandbox.
+    pub uploaded_drvs: Arc<Mutex<HashMap<StorePath, Vec<u8>>>>,
 }
 
 impl Tools {
@@ -48,6 +52,8 @@ impl Tools {
             nix_ninja: which_store_path(store_dir, "nix-ninja")?,
             nix_ninja_task: which_store_path(store_dir, "nix-ninja-task")?,
             patchelf: which_store_path(store_dir, "patchelf")?,
+            rpc_client: RpcClient::new(),
+            uploaded_drvs: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }
@@ -125,7 +131,8 @@ impl Runner {
 
         let mut wrapper_vars = HashMap::new();
         for (key, value) in env::vars() {
-            if ["NIX_LDFLAGS", "NIX_CFLAGS_COMPILE"].contains(&key.as_str())
+            if key.starts_with("NIX_CFLAGS_COMPILE")
+                || key.starts_with("NIX_LDFLAGS")
                 || key.starts_with("NIX_CC_WRAPPER")
                 || key.starts_with("NIX_BINTOOLS_WRAPPER")
             {
@@ -133,11 +140,13 @@ impl Runner {
             }
         }
 
-        // Remove -frandom-seed from NIX_CFLAGS_COMPILE as we'll calculate it
+        // Remove -frandom-seed from NIX_CFLAGS_COMPILE* as we'll calculate it
         // per task derivation. Otherwise this will be different every time
         // breaking incrementality.
-        if let Some(cflags) = wrapper_vars.get_mut("NIX_CFLAGS_COMPILE") {
-            *cflags = remove_frandom_seed(cflags);
+        for (key, value) in wrapper_vars.iter_mut() {
+            if key.starts_with("NIX_CFLAGS_COMPILE") {
+                *value = remove_frandom_seed(value);
+            }
         }
 
         // Extract store paths from wrapper variables once
@@ -181,6 +190,7 @@ impl Runner {
 
             let path = entry.into_path();
             let derived_file = new_opaque_file(
+                &self.tools.rpc_client,
                 &self.tools.nix_tool,
                 &self.config.store_dir,
                 &self.config.build_dir,
@@ -330,6 +340,7 @@ impl Runner {
                     }
 
                     let input = new_opaque_file(
+                        &self.tools.rpc_client,
                         &self.tools.nix_tool,
                         &self.config.store_dir,
                         &self.config.build_dir,
@@ -441,7 +452,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
 
     // Propagate wrapper environment variables to the task.
     for (key, value) in &task.wrapper_vars {
-        let final_value = if key == "NIX_CFLAGS_COMPILE" {
+        let final_value = if key.starts_with("NIX_CFLAGS_COMPILE") {
             // Also add a deterministic random seed based on the task's
             // cmdline for reproducible builds.
             let deterministic_seed = generate_frandom_seed(cmdline);
@@ -498,6 +509,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
                 .collect();
 
             let (discovered_deps, discovered_store_paths) = discover_c_includes(
+                &tools.rpc_client,
                 &tools.nix_tool,
                 &task.store_dir,
                 &task.build_dir,
@@ -557,7 +569,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
             "{}:{}:{}",
             &placeholder.render().display(),
             &output_path.display(),
-            &output_path.display()
+            &output_path.display(),
         );
         outputs.push(encoded);
     }
@@ -588,10 +600,6 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
         drv.env
             .insert(b"PATH"[..].into(), path.join(":").into_bytes().into());
     }
-
-    // For debugging purposes:
-    // let json = serde_json::to_string_pretty(&drv)?;
-    // println!("Derivation:\n{json}");
 
     Ok(drv)
 }
@@ -656,6 +664,11 @@ fn build_dynamic_task_derivation(
     drv.args.push(b"-t"[..].into());
     drv.args.push(b"dynamic-task"[..].into());
 
+    // builder-rpc-v0 does not auto-export $name, but the outer-output rename needs it.
+    let dyn_drv_name = format!("{}.drv", input_drv.name);
+    drv.env
+        .insert(b"name"[..].into(), dyn_drv_name.into_bytes().into());
+
     // Propagate sources to dynamic task for it discover inputs.
     let src = env::var("src").map_err(|_| anyhow!("Expected $src to be set"))?;
     drv.env
@@ -674,10 +687,13 @@ fn build_dynamic_task_derivation(
         b"extra-experimental-features = nix-command ca-derivations dynamic-derivations"[..].into(),
     );
 
-    // Require recursive-nix to allow nix commands inside the build
+    // Require builder-rpc-v0 so the dynamic-task drv runs in a sandbox
+    // where the daemon socket is bind-mounted in restricted mode (see
+    // NixOS/nix#15793). nix-ninja's inside-sandbox calls then go through
+    // the worker protocol's restricted allowlist instead of recursive-nix.
     drv.env.insert(
         b"requiredSystemFeatures"[..].into(),
-        b"recursive-nix"[..].into(),
+        b"builder-rpc-v0"[..].into(),
     );
 
     // Serialize the derivation to a temporary file and add to nix store
@@ -691,11 +707,17 @@ fn build_dynamic_task_derivation(
     };
     // Create an intermediate directory so that we don't pass through the hash to store names
     let temp_dir = std::env::temp_dir().join(format!("drv-json-{:016x}", drv_hash));
-    std::fs::create_dir_all(&temp_dir)?;
+    std::fs::create_dir_all(&temp_dir)
+        .with_context(|| format!("create_dir_all({})", temp_dir.display()))?;
 
-    let temp_file = temp_dir.join(format!("drv-{}.json", input_drv.name));
-    fs::write(&temp_file, &drv_json)?;
-    let drv_json_path = tools.nix_tool.store_add(store_dir, &temp_file)?;
+    let drv_json_name = format!("drv-{}.json", input_drv.name);
+    let temp_file = temp_dir.join(&drv_json_name);
+    fs::write(&temp_file, &drv_json)
+        .with_context(|| format!("writing drv json to {}", temp_file.display()))?;
+    let drv_json_path = tools.rpc_client.with(|client| match client {
+        Some(client) => Ok(client.add_to_store_text(&drv_json_name, drv_json.as_bytes())?),
+        None => tools.nix_tool.store_add(store_dir, &temp_file),
+    })?;
 
     // Add derivation.json as input dependency and argument
     drv.inputs
@@ -737,9 +759,7 @@ fn handle_derivation_result(
         if config.is_output_derivation {
             let dynamic_drv =
                 build_dynamic_task_derivation(tools.clone(), &config.store_dir, drv, built_inputs)?;
-            let dynamic_drv_path = tools
-                .nix_tool
-                .derivation_add(&config.store_dir, &dynamic_drv)?;
+            let dynamic_drv_path = add_derivation(&tools, &config.store_dir, &dynamic_drv)?;
             Ok(SingleDerivedPath::Built {
                 drv_path: Arc::new(SingleDerivedPath::Opaque(dynamic_drv_path)),
                 output: "out".parse().unwrap(),
@@ -760,6 +780,7 @@ fn handle_derivation_result(
 
             let (discovered_deps, discovered_store_paths) =
                 dynamic_task::discover_dynamic_dependencies(
+                    &tools.rpc_client,
                     &tools.nix_tool,
                     &config.store_dir,
                     &config.build_dir,
@@ -774,13 +795,29 @@ fn handle_derivation_result(
                 &config.store_dir,
             )?;
 
-            let drv_path = tools.nix_tool.derivation_add(&config.store_dir, &drv)?;
+            let drv_path = add_derivation(&tools, &config.store_dir, &drv)?;
             Ok(SingleDerivedPath::Opaque(drv_path))
         }
     } else {
-        let drv_path = tools.nix_tool.derivation_add(&config.store_dir, &drv)?;
+        let drv_path = add_derivation(&tools, &config.store_dir, &drv)?;
         Ok(SingleDerivedPath::Opaque(drv_path))
     }
+}
+
+/// Cache builder-rpc-v0 ATerm bytes because the outer-output rename cannot read .drv files from disk.
+fn add_derivation(tools: &Tools, store_dir: &StoreDir, drv: &Derivation) -> Result<StorePath> {
+    tools.rpc_client.with(|client| match client {
+        Some(client) => {
+            let (path, bytes) = client.add_drv_to_store(store_dir, drv)?;
+            tools
+                .uploaded_drvs
+                .lock()
+                .unwrap()
+                .insert(path.clone(), bytes);
+            Ok(path)
+        }
+        None => tools.nix_tool.derivation_add(store_dir, drv),
+    })
 }
 
 pub fn which_store_path(store_dir: &StoreDir, binary_name: &str) -> Result<StorePath> {
@@ -788,7 +825,13 @@ pub fn which_store_path(store_dir: &StoreDir, binary_name: &str) -> Result<Store
         which(binary_name).map_err(|err| anyhow!("Failed to find {}: {}", binary_name, err))?;
 
     // Canonicalize will resolve all symlinks and return an absolute path
-    let canonical_path = std::fs::canonicalize(binary_path)?;
+    let canonical_path = std::fs::canonicalize(&binary_path).with_context(|| {
+        format!(
+            "canonicalize {} (from PATH lookup of {})",
+            binary_path.display(),
+            binary_name
+        )
+    })?;
 
     let store_path_dir = canonical_path
         .parent() // Get bin/ directory
@@ -820,6 +863,7 @@ fn extract_store_paths(
 }
 
 fn new_opaque_file(
+    rpc_client: &RpcClient,
     nix: &NixTool,
     store_dir: &StoreDir,
     build_dir: &std::path::Path,
@@ -829,10 +873,29 @@ fn new_opaque_file(
     let mut path = relative_path.to_string_lossy().into_owned();
     canon::canonicalize_path(&mut path);
 
-    let canonical_path = fs::canonicalize(&path)?;
-    let store_path = nix.store_add(store_dir, &canonical_path)?;
+    let canonical_path = fs::canonicalize(&path).with_context(|| format!("canonicalize {path}"))?;
+
+    let store_path = rpc_client.with(|client| match client {
+        // builder-rpc-v0 restricts the allowlist; `nix store add` issues
+        // AddTempRoot which the daemon refuses. Go through AddTextToStore
+        // (single-file text-CA) instead — harmonia's `r:sha256` cam
+        // serialization isn't accepted by PR Nix's parser, and we only
+        // ever handle regular files here anyway.
+        Some(client) => {
+            let bytes = fs::read(&canonical_path)
+                .with_context(|| format!("reading {}", canonical_path.display()))?;
+            let name = canonical_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "source".to_string());
+            Ok(client.add_to_store_text(&name, &bytes)?)
+        }
+        None => nix
+            .store_add(store_dir, &canonical_path)
+            .with_context(|| format!("store_add {}", canonical_path.display())),
+    })?;
     Ok(DerivedFile {
-        derived_path: SingleDerivedPath::Opaque(store_path.clone()),
+        derived_path: SingleDerivedPath::Opaque(store_path),
         build_path: relative_path,
         rel_path: None, // None for opaque files - store path points directly to file
     })
@@ -846,7 +909,7 @@ fn new_built_file(derived_path: SingleDerivedPath, build_path: PathBuf) -> Deriv
             output: output_name.parse().expect("invalid output name"),
         },
         build_path: build_path.clone(),
-        rel_path: Some(build_path), // For built files, rel_path same as build_path
+        rel_path: Some(build_path),
     }
 }
 
@@ -861,6 +924,7 @@ fn normalize_output(output: &str) -> String {
 /// - discovered_deps: DerivedFiles that need to be encoded and added to NIX_NINJA_INPUTS
 /// - discovered_store_paths: Store paths that only need to be added as input sources
 pub fn discover_c_includes(
+    rpc_client: &RpcClient,
     nix_tool: &NixTool,
     store_dir: &StoreDir,
     build_dir: &Path,
@@ -892,7 +956,7 @@ pub fn discover_c_includes(
         }
 
         // Regular file, add to nix store and treat as derived dependency
-        let derived_file = new_opaque_file(nix_tool, store_dir, build_dir, include)?;
+        let derived_file = new_opaque_file(rpc_client, nix_tool, store_dir, build_dir, include)?;
         discovered_deps.push(derived_file);
     }
 

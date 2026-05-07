@@ -4,7 +4,8 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     nix = {
-      url = "github:NixOS/nix";
+      # Track NixOS/nix#15793 (builder-rpc-v0) until it lands upstream.
+      url = "github:obsidiansystems/nix/register-daemon-protocol";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.nixpkgs-23-11.follows = "";
       inputs.nixpkgs-regression.follows = "";

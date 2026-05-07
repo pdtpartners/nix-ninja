@@ -10,5 +10,17 @@ edition = "2021"
 name = "nix-ninja"
 
 [workspace.dependencies]
-harmonia-store-core = { git = "https://github.com/nix-community/harmonia.git" }
+harmonia-store-aterm = { git = "https://github.com/obsidiansystems/harmonia.git", branch = "builder-rpc-v0" }
+harmonia-store-core = { git = "https://github.com/obsidiansystems/harmonia.git", branch = "builder-rpc-v0" }
+harmonia-protocol = { git = "https://github.com/obsidiansystems/harmonia.git", branch = "builder-rpc-v0" }
+harmonia-store-remote = { git = "https://github.com/obsidiansystems/harmonia.git", branch = "builder-rpc-v0" }
 harmonia-utils-hash = "0.0.0-alpha.0"
+
+[patch.crates-io]
+harmonia-nar = { git = "https://github.com/obsidiansystems/harmonia.git", branch = "builder-rpc-v0" }
+harmonia-protocol = { git = "https://github.com/obsidiansystems/harmonia.git", branch = "builder-rpc-v0" }
+harmonia-protocol-derive = { git = "https://github.com/obsidiansystems/harmonia.git", branch = "builder-rpc-v0" }
+harmonia-store-aterm = { git = "https://github.com/obsidiansystems/harmonia.git", branch = "builder-rpc-v0" }
+harmonia-store-core = { git = "https://github.com/obsidiansystems/harmonia.git", branch = "builder-rpc-v0" }
+harmonia-store-remote = { git = "https://github.com/obsidiansystems/harmonia.git", branch = "builder-rpc-v0" }
+harmonia-utils-io = { git = "https://github.com/obsidiansystems/harmonia.git", branch = "builder-rpc-v0" }

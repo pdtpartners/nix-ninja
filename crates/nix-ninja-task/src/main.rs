@@ -43,14 +43,12 @@ fn main() -> Result<()> {
 
     let mut inputs = Vec::new();
     for encoded in cli.inputs.split_whitespace() {
-        // println!("Processing input {}", encoded);
         let input = DerivedFile::from_encoded(&cli.store_dir, encoded)?;
         inputs.push(input);
     }
 
     let mut outputs = Vec::new();
     for encoded in cli.outputs.split_whitespace() {
-        // println!("Processing output {}", encoded);
         let output = DerivedFile::from_encoded(&cli.store_dir, encoded)?;
         outputs.push(output);
     }
@@ -95,14 +93,19 @@ fn main() -> Result<()> {
         "nix-ninja-task: Finished! Copying {} build outputs to derivation output paths",
         outputs.len(),
     );
-    for output in &outputs {
-        let target_path = output.absolute_path(&cli.store_dir);
+    copy_outputs_to_placeholders(&cli.store_dir, &outputs)?;
+
+    Ok(())
+}
+
+fn copy_outputs_to_placeholders(store_dir: &StoreDir, outputs: &[DerivedFile]) -> Result<()> {
+    for output in outputs {
+        let target_path = output.absolute_path(store_dir);
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }
         fs::copy(&output.build_path, &target_path)?;
     }
-
     Ok(())
 }
 

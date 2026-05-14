@@ -63,13 +63,13 @@ pub struct Cli {
     pub targets: Vec<String>,
 }
 
-pub fn run() -> Result<i32> {
+pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.print_version {
         // For compatibility with meson, it expects >= 1.8.2.
         println!("1.8.2");
-        return Ok(0);
+        return Ok(());
     }
 
     // Change directory if specified
@@ -94,32 +94,20 @@ pub fn run() -> Result<i32> {
         );
     }
 
-    match build(&cli, &build_dir) {
-        Ok(derived_file) => {
-            if cli.is_output_derivation {
-                let out = env::var("out").map_err(|_| anyhow!("Expected $out to be set"))?;
-                fs::copy(
-                    derived_file
-                        .derived_path
-                        .root_path()
-                        .to_absolute_path(&cli.store_dir),
-                    out,
-                )?;
-            } else {
-                local::symlink_derived_files(
-                    &nix_tool,
-                    &cli.store_dir,
-                    &build_dir,
-                    &[derived_file],
-                )?;
-            }
-            Ok(0)
-        }
-        Err(err) => {
-            println!("nix-ninja: {err}");
-            Ok(1)
-        }
+    let derived_file = build(&cli, &build_dir)?;
+    if cli.is_output_derivation {
+        let out = env::var("out").map_err(|_| anyhow!("Expected $out to be set"))?;
+        fs::copy(
+            derived_file
+                .derived_path
+                .root_path()
+                .to_absolute_path(&cli.store_dir),
+            out,
+        )?;
+    } else {
+        local::symlink_derived_files(&nix_tool, &cli.store_dir, &build_dir, &[derived_file])?;
     }
+    Ok(())
 }
 
 fn build(cli: &Cli, build_dir: &Path) -> Result<DerivedFile> {
@@ -143,12 +131,13 @@ fn subtool(
     store_dir: &StoreDir,
     subtool_name: &str,
     targets: Vec<String>,
-) -> Result<i32> {
+) -> Result<()> {
     match subtool_name {
         "list" => {
             println!("nix-ninja subtools:");
             println!("  drv           show Nix derivation generated for a target");
             println!("  dynamic-task  generate task derivation from task + discovered deps");
+            Ok(())
         }
         "drv" => {
             let cli = Cli::parse();
@@ -157,31 +146,19 @@ fn subtool(
                 nix_tool.derivation_show(store_dir, derived_file.derived_path.root_path())?;
             let stdout = str::from_utf8(&output.stdout)?;
             println!("{stdout}");
+            Ok(())
         }
-        "dynamic-task" => {
-            return Ok(dynamic_task_subtool(nix_tool, store_dir, targets));
-        }
+        "dynamic-task" => dynamic_task::run(nix_tool, store_dir, targets),
         // Meson compatibility tools.
         "restat" | "clean" | "cleandead" | "compdb" => {
             // TODO: Implement what's necessary, I think only compdb needs to
             // work and the rest can no-op.
+            Ok(())
         }
         _ => {
-            println!(
+            anyhow::bail!(
                 "Unknown subtool '{subtool_name}'. Use '-t list' to get a list of available subtools."
             );
-            return Ok(1);
-        }
-    }
-    Ok(0)
-}
-
-fn dynamic_task_subtool(nix_tool: NixTool, store_dir: &StoreDir, targets: Vec<String>) -> i32 {
-    match dynamic_task::run(nix_tool, store_dir, targets) {
-        Ok(code) => code,
-        Err(err) => {
-            eprintln!("nix-ninja-dynamic-task: {err}");
-            1
         }
     }
 }

@@ -12,7 +12,7 @@ use std::{
 
 use crate::task::discover_c_includes;
 
-pub fn run(nix_tool: NixTool, store_dir: &StoreDir, targets: Vec<String>) -> Result<i32> {
+pub fn run(nix_tool: NixTool, store_dir: &StoreDir, targets: Vec<String>) -> Result<()> {
     let input_drv = targets
         .first()
         .ok_or_else(|| anyhow!("Expected derivation path as argument"))?;
@@ -53,7 +53,7 @@ pub fn run(nix_tool: NixTool, store_dir: &StoreDir, targets: Vec<String>) -> Res
     fs::copy(drv_path.to_absolute_path(store_dir), out)?;
 
     println!("nix-ninja-dynamic-task: Added derivation to store: {drv_path}");
-    Ok(0)
+    Ok(())
 }
 
 /// Stage 1: Prepare build environment by setting up directories, copying source,

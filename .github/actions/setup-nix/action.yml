@@ -1,8 +1,8 @@
 runs:
   using: composite
   steps:
-    - uses: DeterminateSystems/nix-installer-action@v19
+    - uses: cachix/install-nix-action@v31
       with:
-        extra-conf: |-
-          extra-experimental-features = dynamic-derivations ca-derivations recursive-nix
+        extra_nix_config: |-
+          extra-experimental-features = nix-command flakes dynamic-derivations ca-derivations
     - uses: DeterminateSystems/magic-nix-cache-action@v13

@@ -51,7 +51,8 @@ impl NixTool {
             .args(["build", "-L", "--no-link", "--print-out-paths"])
             .args(&installables)
             .stderr(std::process::Stdio::inherit())
-            .output()?;
+            .output()
+            .with_context(|| format!("running `{} build`", self.config.nix_tool))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -104,15 +105,20 @@ impl NixTool {
             .stderr(std::process::Stdio::piped());
 
         // Spawn the command and write to stdin
-        let mut child = command.spawn()?;
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("running `{} derivation add`", self.config.nix_tool))?;
         child
             .stdin
             .take()
             .ok_or_else(|| anyhow!("Failed to open stdin"))?
-            .write_all(json.as_bytes())?;
+            .write_all(json.as_bytes())
+            .context("writing derivation JSON to stdin")?;
 
         // Wait for the command to complete and get output
-        let output = child.wait_with_output()?;
+        let output = child
+            .wait_with_output()
+            .context("waiting for `nix derivation add`")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -135,7 +141,8 @@ impl NixTool {
         let output = Command::new(&self.config.nix_tool)
             .args(&self.config.extra_args)
             .args(args)
-            .output()?;
+            .output()
+            .with_context(|| format!("running `{}`", self.config.nix_tool))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

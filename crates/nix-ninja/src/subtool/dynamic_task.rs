@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use harmonia_store_core::derivation::Derivation;
-use harmonia_store_core::derived_path::SingleDerivedPath;
+use harmonia_store_core::derived_path::{OutputName, SingleDerivedPath};
 use harmonia_store_core::store_path::{StoreDir, StorePath};
 use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::NixTool;
@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::rpc_client::RpcClient;
 use crate::task::discover_c_includes;
 
 pub fn run(nix_tool: NixTool, store_dir: &StoreDir, targets: Vec<String>) -> Result<()> {
@@ -21,12 +22,20 @@ pub fn run(nix_tool: NixTool, store_dir: &StoreDir, targets: Vec<String>) -> Res
     let mut drv: Derivation = serde_json::from_str(&drv_json)?;
     println!("nix-ninja-dynamic-task: Processing derivation {}", drv.name);
 
+    let rpc_client = RpcClient::new();
+
     // Stage 1: Prepare build environment
     let (build_dir, built_paths) = prepare_build_environment(store_dir)?;
 
     // Stage 2: Discover dynamic dependencies
-    let (discovered_deps, discovered_store_paths) =
-        discover_dynamic_dependencies(&nix_tool, store_dir, &build_dir, &drv, built_paths)?;
+    let (discovered_deps, discovered_store_paths) = discover_dynamic_dependencies(
+        &rpc_client,
+        &nix_tool,
+        store_dir,
+        &build_dir,
+        &drv,
+        built_paths,
+    )?;
 
     // Stage 3: Update derivation with discovered dependencies
     let new_deps = update_derivation_with_discoveries(
@@ -48,9 +57,23 @@ pub fn run(nix_tool: NixTool, store_dir: &StoreDir, targets: Vec<String>) -> Res
         println!("nix-ninja-dynamic-task: No new dependencies discovered");
     }
 
-    let drv_path = nix_tool.derivation_add(store_dir, &drv)?;
-    let out = env::var("out").map_err(|_| anyhow!("Expected $out to be set"))?;
-    fs::copy(drv_path.to_absolute_path(store_dir), out)?;
+    let drv_path = rpc_client.with(|client| match client {
+        Some(client) => {
+            let (added_path, _) = client.add_drv_to_store(store_dir, &drv)?;
+
+            client.submit_output(
+                &SingleDerivedPath::Opaque(added_path.clone()),
+                &OutputName::default(),
+            )?;
+            Ok(added_path)
+        }
+        None => {
+            let path = nix_tool.derivation_add(store_dir, &drv)?;
+            let out = env::var("out").map_err(|_| anyhow!("Expected $out to be set"))?;
+            fs::copy(path.to_absolute_path(store_dir), out)?;
+            Ok(path)
+        }
+    })?;
 
     println!("nix-ninja-dynamic-task: Added derivation to store: {drv_path}");
     Ok(())
@@ -95,6 +118,7 @@ fn prepare_build_environment(store_dir: &StoreDir) -> Result<(PathBuf, HashMap<P
 
 /// Stage 2: Discover dynamic dependencies by analyzing built files for includes
 pub fn discover_dynamic_dependencies(
+    rpc_client: &RpcClient,
     nix_tool: &NixTool,
     store_dir: &StoreDir,
     build_dir: &Path,
@@ -110,6 +134,7 @@ pub fn discover_dynamic_dependencies(
     let files: Vec<PathBuf> = built_paths.keys().cloned().collect();
 
     discover_c_includes(
+        rpc_client,
         nix_tool,
         store_dir,
         build_dir,

@@ -1,15 +1,23 @@
+use crate::rpc_client::RpcClient;
 use crate::task;
 use anyhow::bail;
 use anyhow::{anyhow, Result};
-use harmonia_store_core::store_path::StoreDir;
+use harmonia_store_core::store_path::{StoreDir, StorePath};
 use n2::densemap::DenseMap;
 use n2::graph::{Build, BuildId, FileId, Graph};
 use n2::{canon, load, scanner};
 use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::{NixTool, StoreConfig};
-use std::collections::HashSet;
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+/// Final task output plus state submit_outer_output reuses (cached drv bytes + the same daemon client).
+pub struct BuildResult {
+    pub derived_file: DerivedFile,
+    pub rpc_client: RpcClient,
+    pub uploaded_drvs: Arc<Mutex<HashMap<StorePath, Vec<u8>>>>,
+}
 
 pub struct BuildConfig {
     pub build_dir: PathBuf,
@@ -22,7 +30,7 @@ pub fn build(
     build_filename: &str,
     targets: Vec<String>,
     config: BuildConfig,
-) -> Result<DerivedFile> {
+) -> Result<BuildResult> {
     let mut loader = load_file(build_filename)?;
 
     let nix = NixTool::new(StoreConfig {
@@ -31,6 +39,8 @@ pub fn build(
     });
 
     let tools = task::Tools::new(&config.store_dir, nix)?;
+    let rpc_client = tools.rpc_client.clone();
+    let uploaded_drvs = tools.uploaded_drvs.clone();
 
     let mut runner = task::Runner::new(
         tools,
@@ -56,15 +66,17 @@ pub fn build(
     let _ = scheduler.want_file(fid);
     scheduler.run()?;
 
-    // println!("Successfully generated all derivations");
-
     let derived_file = runner.derived_files.get(&fid).ok_or(anyhow!(
         "Missing derived file {:?} for target {}",
         fid,
         name
     ))?;
 
-    Ok(derived_file.clone())
+    Ok(BuildResult {
+        derived_file: derived_file.clone(),
+        rpc_client,
+        uploaded_drvs,
+    })
 }
 
 fn load_file(build_filename: &str) -> Result<load::Loader> {
@@ -296,7 +308,6 @@ impl<'a> Scheduler<'a> {
             while let Some(bid) = self.build_states.pop_ready() {
                 let build = &self.graph.builds[bid];
                 self.build_states.set(bid, BuildState::Running);
-                // println!("Writing derivation for {:?} at {:?}", &bid, &build.location);
                 self.runner.start(&mut self.graph.files, bid, build)?;
                 made_progress = true;
             }
@@ -306,7 +317,6 @@ impl<'a> Scheduler<'a> {
             }
 
             let bid = self.runner.wait(&mut self.graph.files)?;
-            // println!("Derivation for build {:?} has been written", &bid);
             self.ready_dependents(bid);
         }
 

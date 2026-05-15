@@ -21,6 +21,7 @@
 , libseccomp
 , libsodium
 , lowdown
+, mimalloc
 , mkMesonPackage
 , nlohmann_json
 , openssl
@@ -37,6 +38,12 @@ mkMesonPackage {
   name = "example-nix";
   inherit src;
   target = "src/nix/nix";
+
+  # nix-ninja does not generate a compile-commands.json, which causes clean_compdb.py to fail.
+  # It's only needed for clang-tidy, so just make the file a no-op.
+  postPatch = ''
+    echo > nix-meson-build-support/common/clang-tidy/clean_compdb.py
+  '';
 
   nativeBuildInputs = [
     aws-sdk-cpp
@@ -59,6 +66,7 @@ mkMesonPackage {
     libseccomp
     libsodium
     lowdown
+    mimalloc
     nlohmann_json
     openssl
     perl

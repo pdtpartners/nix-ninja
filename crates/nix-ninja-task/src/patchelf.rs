@@ -1,5 +1,5 @@
 use crate::derived_file::DerivedFile;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context as _, Result};
 use elf::endian::AnyEndian;
 use elf::ElfBytes;
 use std::fs;
@@ -74,7 +74,10 @@ fn compute_new_rpath(store_dir: &Path, elf_path: &Path) -> Result<Option<Vec<Str
             continue;
         };
 
-        let lib_str = lib_dir.to_string_lossy().to_string();
+        let lib_str = lib_dir
+            .to_str()
+            .context("Library directiory was not UTF-8")?
+            .to_owned();
         if !new_rpath.contains(&lib_str) {
             new_rpath.push(lib_str);
             path_added = true;

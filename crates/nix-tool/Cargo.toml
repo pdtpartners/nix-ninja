@@ -7,5 +7,6 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
-harmonia-store-core = { workspace = true }
+harmonia-store-derivation = { workspace = true }
+harmonia-store-path = { workspace = true }
 serde_json = "1"

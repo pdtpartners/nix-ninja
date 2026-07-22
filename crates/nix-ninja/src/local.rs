@@ -1,6 +1,6 @@
 use anyhow::Result;
-use harmonia_store_core::derived_path::SingleDerivedPath;
-use harmonia_store_core::store_path::StoreDir;
+use harmonia_store_derivation::derived_path::SingleDerivedPath;
+use harmonia_store_path::StoreDir;
 use nix_ninja_task::derived_file::{create_symlinks, DerivedFile};
 use nix_tool::NixTool;
 use std::collections::HashMap;

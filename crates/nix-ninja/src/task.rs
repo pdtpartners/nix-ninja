@@ -3,10 +3,11 @@ use crate::relative_from::relative_from;
 use crate::subtool::dynamic_task;
 use anyhow::{anyhow, Context, Error, Result};
 use deps_infer::c_include_parser;
-use harmonia_store_core::derivation::{Derivation, DerivationOutput};
-use harmonia_store_core::derived_path::{OutputName, SingleDerivedPath};
-use harmonia_store_core::placeholder::Placeholder;
-use harmonia_store_core::store_path::{ContentAddressMethodAlgorithm, StoreDir, StorePath};
+use harmonia_store_content_address::ContentAddressMethodAlgorithm;
+use harmonia_store_derivation::derivation::{Derivation, DerivationOutput};
+use harmonia_store_derivation::derived_path::{OutputName, SingleDerivedPath};
+use harmonia_store_derivation::placeholder::Placeholder;
+use harmonia_store_path::{StoreDir, StorePath};
 use n2::{
     canon,
     graph::{self, Build, BuildDependencies, BuildId, File, FileId},
@@ -544,7 +545,7 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
         let normalized_name = normalize_output(&output_path.to_string_lossy());
         drv.outputs.insert(
             normalized_name.parse()?,
-            DerivationOutput::CAFloating(ContentAddressMethodAlgorithm::Recursive(
+            DerivationOutput::CAFloating(ContentAddressMethodAlgorithm::NixArchive(
                 harmonia_utils_hash::Algorithm::SHA256,
             )),
         );

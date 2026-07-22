@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
-use harmonia_store_core::derivation::Derivation;
-use harmonia_store_core::derived_path::SingleDerivedPath;
-use harmonia_store_core::store_path::{StoreDir, StorePath};
+use harmonia_store_derivation::derivation::Derivation;
+use harmonia_store_derivation::derived_path::SingleDerivedPath;
+use harmonia_store_path::{StoreDir, StorePath};
 use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::NixTool;
 use std::{

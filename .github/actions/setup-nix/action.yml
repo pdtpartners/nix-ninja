@@ -5,4 +5,4 @@ runs:
       with:
         extra_nix_config: |-
           extra-experimental-features = nix-command flakes dynamic-derivations ca-derivations
-    - uses: DeterminateSystems/magic-nix-cache-action@v13
+    - uses: Mic92/hestia@v2

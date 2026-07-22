@@ -556,9 +556,9 @@ fn build_task_derivation(tools: Tools, task: Task) -> Result<Derivation> {
         );
         let encoded = format!(
             "{}:{}:{}",
-            &placeholder.render().display(),
-            &output_path.display(),
-            &output_path.display()
+            placeholder.render().display(),
+            output_path.display(),
+            output_path.display()
         );
         outputs.push(encoded);
     }

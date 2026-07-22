@@ -40,7 +40,7 @@ impl DerivedFile {
         format!(
             "{}:{}:{}",
             path_str,
-            &self.build_path.to_string_lossy(),
+            self.build_path.to_string_lossy(),
             rel_path_str
         )
     }

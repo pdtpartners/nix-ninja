@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use harmonia_store_core::store_path::StoreDir;
+use harmonia_store_path::StoreDir;
 use nix_ninja_task::derived_file::{create_symlinks, DerivedFile};
 use nix_ninja_task::patchelf;
 use std::env;

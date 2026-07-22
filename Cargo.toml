@@ -10,5 +10,7 @@ edition = "2021"
 name = "nix-ninja"
 
 [workspace.dependencies]
-harmonia-store-core = { git = "https://github.com/nix-community/harmonia.git" }
-harmonia-utils-hash = "0.0.0-alpha.0"
+harmonia-store-content-address = { git = "https://github.com/nix-community/harmonia.git", branch = "main" }
+harmonia-store-derivation = { git = "https://github.com/nix-community/harmonia.git", branch = "main" }
+harmonia-store-path = { git = "https://github.com/nix-community/harmonia.git", branch = "main" }
+harmonia-utils-hash = { git = "https://github.com/nix-community/harmonia.git", branch = "main" }

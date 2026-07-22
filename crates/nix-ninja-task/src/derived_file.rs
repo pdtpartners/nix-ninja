@@ -1,9 +1,9 @@
 use anyhow::Context;
 use anyhow::{anyhow, Result};
-use harmonia_store_core::derived_path::SingleDerivedPath;
-use harmonia_store_core::placeholder::StorePathOrPlaceholder;
-use harmonia_store_core::store_path::StoreDir;
-use harmonia_store_core::store_path::StorePath;
+use harmonia_store_derivation::derived_path::SingleDerivedPath;
+use harmonia_store_derivation::placeholder::StorePathOrPlaceholder;
+use harmonia_store_path::StoreDir;
+use harmonia_store_path::StorePath;
 use std::fmt;
 use std::fs;
 use std::os::unix::fs::symlink;

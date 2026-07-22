@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Context, Result};
-use harmonia_store_core::derivation::Derivation;
-use harmonia_store_core::derived_path::SingleDerivedPath;
-use harmonia_store_core::store_path::StoreDir;
-use harmonia_store_core::store_path::StorePath;
+use harmonia_store_derivation::derivation::Derivation;
+use harmonia_store_derivation::derived_path::SingleDerivedPath;
+use harmonia_store_path::StoreDir;
+use harmonia_store_path::StorePath;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::process::{Command, Output};

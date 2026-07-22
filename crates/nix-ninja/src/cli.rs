@@ -3,7 +3,7 @@ use crate::local;
 use crate::subtool::dynamic_task;
 use anyhow::{anyhow, Context as _, Result};
 use clap::Parser;
-use harmonia_store_core::store_path::StoreDir;
+use harmonia_store_path::StoreDir;
 use nix_ninja_task::derived_file::DerivedFile;
 use nix_tool::{NixTool, StoreConfig};
 use std::{

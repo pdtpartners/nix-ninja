@@ -1,7 +1,7 @@
 use crate::task;
 use anyhow::bail;
 use anyhow::{anyhow, Result};
-use harmonia_store_core::store_path::StoreDir;
+use harmonia_store_path::StoreDir;
 use n2::densemap::DenseMap;
 use n2::graph::{Build, BuildId, FileId, Graph};
 use n2::{canon, load, scanner};

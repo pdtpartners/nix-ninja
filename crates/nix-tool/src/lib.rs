@@ -71,7 +71,7 @@ impl NixTool {
     pub fn store_add(&self, store_dir: &StoreDir, path: &std::path::Path) -> Result<StorePath> {
         let output = self
             .run_nix_command(&["store", "add", &path.to_string_lossy()])
-            .map_err(|err| anyhow!("Failed to store add {}: {}", &path.to_string_lossy(), err))?;
+            .map_err(|err| anyhow!("Failed to store add {}: {}", path.to_string_lossy(), err))?;
 
         let store_path_str = String::from_utf8(output.stdout)
             .context("Failed to parse command output")?
@@ -86,7 +86,7 @@ impl NixTool {
     pub fn derivation_show(&self, store_dir: &StoreDir, drv_path: &StorePath) -> Result<Output> {
         let full_path = store_dir.display(drv_path).to_string();
         self.run_nix_command(&["derivation", "show", &full_path])
-            .map_err(|err| anyhow!("Failed to derivation show {}: {}", &full_path, err))
+            .map_err(|err| anyhow!("Failed to derivation show {}: {}", full_path, err))
     }
 
     /// Add a derivation to the Nix store

@@ -1,4 +1,4 @@
-{ self, ... }:
+{ self, lib, ... }:
 {
   perSystem = { pkgs, system, ... }: {
     packages = {
@@ -17,7 +17,10 @@
       };
     };
 
-    legacyPackages = {
+    # The examples are dynamic derivations, which can only be instantiated
+    # when the `dynamic-derivations` experimental feature is enabled (probed
+    # via the feature-gated `builtins.outputOf`).
+    legacyPackages = lib.optionalAttrs (builtins ? outputOf) {
       example-hello = pkgs.example-hello.target;
       example-header = pkgs.example-header.target;
       example-multi-source = pkgs.example-multi-source.target;

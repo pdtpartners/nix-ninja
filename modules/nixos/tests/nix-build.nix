@@ -17,8 +17,13 @@
 
 { self, pkgs, lib, ... }:
 let
+  # Note: no `lib.subtractLists inputsFrom` here (unlike `pkgs.mkShell`, where
+  # this pattern comes from): comparing derivations forces their `outPath`,
+  # and the `inputsFrom` derivations are content-addressed, so that would
+  # require the ca-derivations feature on the host evaluator. The examples
+  # never appear in their own input lists anyway.
   mergeInputs = name:
-    lib.subtractLists inputsFrom (lib.flatten (lib.catAttrs name inputsFrom));
+    lib.flatten (lib.catAttrs name inputsFrom);
 
   # Extracted from `pkgs.mkShell` to capture the closure of inputs of a
   # derivation. I'd like to use `<drv>.inputDerivation` but getting an error

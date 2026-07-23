@@ -121,11 +121,12 @@ where
 }
 
 static INCLUDE_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r##"^\s*#\s*include\s*(["<])([^">]*)[">]"##).unwrap());
+    LazyLock::new(|| Regex::new(r##"^\s*#\s*(?:include|embed)\s*(["<])([^">]*)[">]"##).unwrap());
 
 /// Given a C-like source, try to resolve includes.
 ///
-/// Includes are generally of the form `#include <name>` or `#include "name"`
+/// Includes are generally of the form `#include <name>` or `#include "name"`.
+/// Also, C23 `#embed` resolves quoted names the same way.
 pub fn extract_includes(
     path: &PathBuf,
     include_dirs: &[PathBuf],

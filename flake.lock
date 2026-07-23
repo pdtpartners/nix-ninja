@@ -169,6 +169,56 @@
         "type": "github"
       }
     },
+    "harmonia": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784734208,
+        "narHash": "sha256-fKJ0H/8sSkolq37PfWLsHX7evNWZE2AQRkgMgjg3bzc=",
+        "owner": "nix-community",
+        "repo": "harmonia",
+        "rev": "b7c7777f422ff42ce637f6b2f356c2dbac2d3db4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "harmonia",
+        "type": "github"
+      }
+    },
+    "igraph": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1743130305,
+        "narHash": "sha256-W5YuVwtdJnNbFY2PbcJ/pM0P6gL+jFZLjvxLnHuugvw=",
+        "owner": "hinshun",
+        "repo": "igraph",
+        "rev": "eb14705fc01b1732f4fe94a5bb6cbd319d9afb0e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hinshun",
+        "ref": "performance-improvements",
+        "repo": "igraph",
+        "type": "github"
+      }
+    },
+    "n2": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1745369924,
+        "narHash": "sha256-3dcRDOJLaAL4lA48fq2ZziMh1eMuQIe8KfbgPVsrJT4=",
+        "owner": "hinshun",
+        "repo": "n2",
+        "rev": "341b5112f69bd77a4345a0855fafd14a73d2689a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hinshun",
+        "ref": "feature/minimal-pub",
+        "repo": "n2",
+        "type": "github"
+      }
+    },
     "nix": {
       "inputs": {
         "flake-compat": "flake-compat_2",
@@ -218,6 +268,9 @@
         "flake-compat": "flake-compat",
         "flake-parts": "flake-parts",
         "globset": "globset",
+        "harmonia": "harmonia",
+        "igraph": "igraph",
+        "n2": "n2",
         "nix": "nix",
         "nixpkgs": "nixpkgs"
       }

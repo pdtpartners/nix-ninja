@@ -56,10 +56,16 @@ in {
           )
           testRigs;
 
-
       legacyPackages =
         lib.mapAttrs'
           (name: testRig: lib.nameValuePair ("driver-" + name) testRig.driver)
+          testRigs;
+
+      # Run each test to completion (and cache the result) as part of
+      # `nix flake check`.
+      checks =
+        lib.mapAttrs'
+          (name: testRig: lib.nameValuePair ("nixos-test-" + name) testRig.test)
           testRigs;
     };
 }

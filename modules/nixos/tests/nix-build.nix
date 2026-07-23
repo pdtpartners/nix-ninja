@@ -17,6 +17,26 @@
 
 { self, pkgs, lib, ... }:
 let
+  # Filtered (allowlisted) copy of the flake for the VM to build from, so the
+  # test derivation only depends on files that affect what it builds —
+  # changes to e.g. README or CI config don't invalidate the tests. The
+  # allowlist must cover everything the in-VM `nix build` evaluates,
+  # producing filesets identical to the ones the flake modules construct
+  # (same contents → same store paths → the prebuilt closures cached in the
+  # VM still match).
+  flakeSrc = lib.fileset.toSource {
+    root = ../../..;
+    fileset = self.inputs.globset.lib.globs ../../.. [
+      "flake.nix"
+      "flake.lock"
+      "modules/**"
+      "Cargo.lock"
+      "**/Cargo.toml"
+      "**/*.rs"
+      "deny.toml"
+    ];
+  };
+
   # Note: no `lib.subtractLists inputsFrom` here (unlike `pkgs.mkShell`, where
   # this pattern comes from): comparing derivations forces their `outPath`,
   # and the `inputsFrom` derivations are content-addressed, so that would
@@ -74,7 +94,7 @@ in {
   testScript = ''
     start_all()
 
-    result = machine.succeed("nix build --print-out-paths ${self}#${flakeOutput}").strip()
+    result = machine.succeed("nix build --print-out-paths ${flakeSrc}#${flakeOutput}").strip()
     out = machine.succeed(f"{result}/${cmdline}")
     assert "${expectedStdout}" in out
   '';
